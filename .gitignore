@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+.env.local
+*.db
+*.sqlite3
+*.log
+to do.*
+~$to do.*
+dist/
+build/
+app.pyc_Decompiled.py
