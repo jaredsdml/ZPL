@@ -1,0 +1,35 @@
+<Window x:Class="Zps.UI.Views.AuditoriaVirtualWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Auditoría Visual — Impresora Virtual"
+        Height="750" Width="420"
+        WindowStartupLocation="CenterOwner">
+    <!-- ByteArrayToImageConverter, NullToVisibilityConverter y CardBorder ya están
+         registrados globalmente en App.xaml/Themes/Styles.xaml. -->
+    <DockPanel Margin="12">
+        <TextBlock DockPanel.Dock="Top"
+                   Text="🖨️ Etiquetas generadas en modo virtual (no se envió nada a una impresora real)"
+                   FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,0,0,10" />
+
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+            <ItemsControl ItemsSource="{Binding}">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <Border Style="{StaticResource CardBorder}" Margin="0,0,0,10">
+                            <StackPanel>
+                                <TextBlock Text="{Binding Lpn}" FontWeight="Bold" Margin="0,0,0,6" />
+                                <Image Source="{Binding ImagenPng, Converter={StaticResource ByteArrayToImageConverter}}"
+                                       Stretch="Uniform" MaxHeight="320"
+                                       Visibility="{Binding ImagenPng, Converter={StaticResource NullToVisibilityConverter}}" />
+                                <TextBlock Text="{Binding Error}"
+                                           Foreground="{DynamicResource DangerBrush}"
+                                           TextWrapping="Wrap"
+                                           Visibility="{Binding Error, Converter={StaticResource NullToVisibilityConverter}}" />
+                            </StackPanel>
+                        </Border>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </ScrollViewer>
+    </DockPanel>
+</Window>

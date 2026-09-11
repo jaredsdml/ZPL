@@ -10,7 +10,9 @@ using CommunityToolkit.Mvvm.Input;
 using Zps.Core;
 using Zps.Core.Models;
 using Zps.Data.Models;
+using Zps.UI.Models;
 using Zps.UI.Services;
+using Zps.UI.Views;
 
 namespace Zps.UI.ViewModels;
 
@@ -35,6 +37,14 @@ namespace Zps.UI.ViewModels;
 /// </summary>
 public sealed partial class GeneradorPrincipalViewModel : ObservableObject
 {
+    /// <summary>
+    /// Impresora "mock" para pruebas/auditoría visual: en vez de mandar bytes RAW por
+    /// winspool, abre una ventana con el renderizado de Labelary de cada etiqueta generada.
+    /// El resto del flujo (reserva de folios, validaciones, guardado en histórico) corre
+    /// idéntico a una impresión real.
+    /// </summary>
+    public const string ImpresoraVirtualNombre = "[VIRTUAL] Previsualizador / Testing";
+
     private readonly AppServices _services;
 
     public ObservableCollection<ClienteCatalogoRecord> Clientes { get; } = new();
@@ -111,6 +121,7 @@ public sealed partial class GeneradorPrincipalViewModel : ObservableObject
         try
         {
             Impresoras.Clear();
+            Impresoras.Add(ImpresoraVirtualNombre);
             foreach (var impresora in _services.Impresoras.ListarImpresorasInstaladas())
             {
                 Impresoras.Add(impresora);
@@ -237,16 +248,29 @@ public sealed partial class GeneradorPrincipalViewModel : ObservableObject
     }
 
     /// <summary>
+    /// Alias operativos: el piso nombra hojas/arribos con convenciones que no siempre
+    /// coinciden con el código registrado en cat_clientes (p. ej. "MNS" para el régimen
+    /// MINISO). Sin este alias, esas hojas caerían siempre al selector de excepción.
+    /// </summary>
+    private static readonly Dictionary<string, string> AliasClientesOperativos = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["MNS"] = "MINISO",
+    };
+
+    /// <summary>
     /// Resuelve el cliente activo a partir del nombre de la hoja (coincidencia exacta,
-    /// insensible a mayúsculas, contra el código o el nombre del catálogo). Si no hay
-    /// coincidencia, no se asume ningún cliente por defecto: se avisa y se habilita el
-    /// selector de excepción para que el operador lo elija a mano.
+    /// insensible a mayúsculas, contra el código o el nombre del catálogo, pasando primero
+    /// por los alias operativos conocidos). Si no hay coincidencia, no se asume ningún
+    /// cliente por defecto: se avisa y se habilita el selector de excepción para que el
+    /// operador lo elija a mano.
     /// </summary>
     private void MapearClientePorNombreDeHoja(string nombreHoja)
     {
+        var nombreBuscado = AliasClientesOperativos.TryGetValue(nombreHoja.Trim(), out var alias) ? alias : nombreHoja;
+
         var encontrado = Clientes.FirstOrDefault(c =>
-            string.Equals(c.Codigo, nombreHoja, StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(c.Nombre, nombreHoja, StringComparison.OrdinalIgnoreCase));
+            string.Equals(c.Codigo, nombreBuscado, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(c.Nombre, nombreBuscado, StringComparison.OrdinalIgnoreCase));
 
         if (encontrado is not null)
         {
@@ -482,6 +506,8 @@ public sealed partial class GeneradorPrincipalViewModel : ObservableObject
             var total = filas.Count;
             var totalHojaCompleta = todasLasFilas.Count;
             var errores = 0;
+            var esImpresoraVirtual = string.Equals(ImpresoraSeleccionada, ImpresoraVirtualNombre, StringComparison.Ordinal);
+            var auditoriaVirtual = esImpresoraVirtual ? new List<AuditoriaEtiqueta>(total) : null;
 
             for (var i = 0; i < infoPorFila.Count; i++)
             {
@@ -512,21 +538,48 @@ public sealed partial class GeneradorPrincipalViewModel : ObservableObject
                     indiceParaZpl,
                     totalParaZpl);
 
-                var resultado = await _services.Impresoras.EncolarAsync(ImpresoraSeleccionada!, zpl, $"LPN {folioPorFila[fila]}");
-                if (!resultado.Exito)
+                if (esImpresoraVirtual)
                 {
-                    errores++;
+                    // Modo auditoría: nunca toca el spooler real; renderiza vía Labelary
+                    // para revisión visual, con la reserva de folios y el guardado en
+                    // histórico ya hechos exactamente igual que en una impresión real.
+                    var resultadoPreview = await _services.Preview.GenerarVistaPreviaAsync(zpl);
+                    auditoriaVirtual!.Add(new AuditoriaEtiqueta(
+                        folioPorFila[fila],
+                        resultadoPreview.Exito ? resultadoPreview.ImagenPng : null,
+                        resultadoPreview.Exito ? null : resultadoPreview.Error));
+                }
+                else
+                {
+                    var resultado = await _services.Impresoras.EncolarAsync(ImpresoraSeleccionada!, zpl, $"LPN {folioPorFila[fila]}");
+                    if (!resultado.Exito)
+                    {
+                        errores++;
+                    }
                 }
 
                 Progreso = (i + 1) / (double)total;
             }
 
-            EstadoMensaje = $"Proceso terminado: {total} etiqueta(s), {errores} error(es).";
+            EstadoMensaje = esImpresoraVirtual
+                ? $"Proceso terminado (modo virtual): {total} etiqueta(s) generadas y guardadas en histórico, ninguna enviada a una impresora real."
+                : $"Proceso terminado: {total} etiqueta(s), {errores} error(es).";
             VistaDatos = DatosExcel.DefaultView;
 
             if (filas.Count > 0)
             {
                 await ActualizarPreviewAsync(filas[0]);
+            }
+
+            if (auditoriaVirtual is not null)
+            {
+                // Se abre en el hilo de UI explícitamente: GenerarVistaPreviaAsync usa
+                // ConfigureAwait(false) internamente, así que la continuación pudo quedar
+                // en un hilo de threadpool en vez del hilo de despacho de WPF.
+                Application.Current.Dispatcher.Invoke(() => new AuditoriaVirtualWindow(auditoriaVirtual)
+                {
+                    Owner = Application.Current.MainWindow
+                }.Show());
             }
         }
         catch (Exception ex)

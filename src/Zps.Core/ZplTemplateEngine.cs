@@ -9,6 +9,19 @@ namespace Zps.Core;
 /// </summary>
 public static class ZplTemplateEngine
 {
+    /// <summary>
+    /// Grupos de nombres de columna que distintos clientes/plantillas usan para referirse
+    /// al mismo dato real (p. ej. AXO mapea "{ATTR}" a la columna "ATTR" en su catálogo,
+    /// pero el Excel de piso real trae la columna "ATRIBUTO"). Si el nombre de columna del
+    /// mapeo no aparece literalmente en la fila, se prueban sus sinónimos antes de dejar el
+    /// token en blanco.
+    /// </summary>
+    private static readonly string[][] GruposSinonimosColumna =
+    {
+        new[] { "ATRIBUTO", "ATTR" },
+        new[] { "CANTIDAD", "CANT", "QTY" },
+    };
+
     public static string Generar(
         string plantillaZpl,
         IReadOnlyDictionary<string, string> mapeoColumnas,
@@ -28,9 +41,14 @@ public static class ZplTemplateEngine
             .Replace("{INDICE}", indiceActual.ToString(), StringComparison.Ordinal)
             .Replace("{TOTAL}", totalFilas.ToString(), StringComparison.Ordinal);
 
+        // Búsqueda insensible a mayúsculas: los nombres de columna del mapeo y de la fila
+        // deberían llegar ya en mayúsculas, pero esto evita tokens en blanco por un simple
+        // desajuste de capitalización.
+        var datosFilaInsensible = new Dictionary<string, string?>(datosFila, StringComparer.OrdinalIgnoreCase);
+
         foreach (var (placeholder, nombreColumna) in mapeoColumnas)
         {
-            var valor = datosFila.TryGetValue(nombreColumna, out var v) ? v : null;
+            var valor = ObtenerValorConSinonimos(datosFilaInsensible, nombreColumna);
             if (string.IsNullOrEmpty(valor) || string.Equals(valor, "nan", StringComparison.OrdinalIgnoreCase))
             {
                 valor = string.Empty;
@@ -40,5 +58,27 @@ public static class ZplTemplateEngine
         }
 
         return zpl;
+    }
+
+    private static string? ObtenerValorConSinonimos(IReadOnlyDictionary<string, string?> datosFila, string nombreColumna)
+    {
+        if (datosFila.TryGetValue(nombreColumna, out var valorDirecto) && !string.IsNullOrEmpty(valorDirecto))
+        {
+            return valorDirecto;
+        }
+
+        var grupo = Array.Find(GruposSinonimosColumna, g => Array.Exists(g, s => string.Equals(s, nombreColumna, StringComparison.OrdinalIgnoreCase)));
+        if (grupo is not null)
+        {
+            foreach (var sinonimo in grupo)
+            {
+                if (datosFila.TryGetValue(sinonimo, out var valorSinonimo) && !string.IsNullOrEmpty(valorSinonimo))
+                {
+                    return valorSinonimo;
+                }
+            }
+        }
+
+        return valorDirecto;
     }
 }
