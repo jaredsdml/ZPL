@@ -84,6 +84,7 @@ public sealed class ExtremoAExtremoIntegrationTests : IAsyncLifetime
                     Sku: $"SKU-{n:D5}",
                     Lote: "LOTE-E2E",
                     Cantidad: n,
+                    Cajas: "CAJA-E2E",
                     VariablesJson: $$"""{"consecutivo": {{n}} }"""))
                 .ToList();
 

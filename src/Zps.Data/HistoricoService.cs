@@ -36,8 +36,8 @@ public sealed class HistoricoService
         {
             var comando = new NpgsqlBatchCommand(
                 """
-                INSERT INTO historico_impresiones (lpn, consecutivo, tipo, cliente, solicitante, arribo, fecha_hora, sku, lote, cantidad, variables_json)
-                VALUES (@lpn, @consecutivo, @tipo, @cliente, @solicitante, @arribo, @fecha_hora, @sku, @lote, @cantidad, @variables_json)
+                INSERT INTO historico_impresiones (lpn, consecutivo, tipo, cliente, solicitante, arribo, fecha_hora, sku, lote, cantidad, cajas, variables_json)
+                VALUES (@lpn, @consecutivo, @tipo, @cliente, @solicitante, @arribo, @fecha_hora, @sku, @lote, @cantidad, @cajas, @variables_json)
                 ON CONFLICT (lpn) DO NOTHING;
                 """);
             comando.Parameters.AddWithValue("lpn", r.Lpn);
@@ -53,6 +53,7 @@ public sealed class HistoricoService
             comando.Parameters.AddWithValue("sku", (object?)r.Sku ?? DBNull.Value);
             comando.Parameters.AddWithValue("lote", (object?)r.Lote ?? DBNull.Value);
             comando.Parameters.AddWithValue("cantidad", (object?)r.Cantidad ?? DBNull.Value);
+            comando.Parameters.AddWithValue("cajas", (object?)r.Cajas ?? DBNull.Value);
             comando.Parameters.Add(new NpgsqlParameter("variables_json", NpgsqlDbType.Jsonb)
             {
                 Value = (object?)r.VariablesJson ?? DBNull.Value
@@ -66,9 +67,9 @@ public sealed class HistoricoService
 
     /// <summary>
     /// Busca folios impresos por coincidencia parcial (ILIKE) en LPN, cliente, arribo,
-    /// solicitante, tipo, consecutivo (convertido a texto), SKU y lote — para el buscador
-    /// rápido de la pestaña de Histórico y Reimpresiones. Sin filtro, devuelve los más
-    /// recientes hasta <paramref name="limite"/>.
+    /// solicitante, tipo, consecutivo (convertido a texto), SKU, lote y cajas — para el
+    /// buscador rápido de la pestaña de Histórico y Reimpresiones. Sin filtro, devuelve los
+    /// más recientes hasta <paramref name="limite"/>.
     /// </summary>
     public async Task<IReadOnlyList<HistoricoImpresionRecord>> BuscarAsync(
         string? filtro,
@@ -76,7 +77,7 @@ public sealed class HistoricoService
         CancellationToken cancellationToken = default)
     {
         const string sql = """
-            SELECT lpn, consecutivo, tipo, cliente, solicitante, arribo, fecha_hora, sku, lote, cantidad, variables_json::text
+            SELECT lpn, consecutivo, tipo, cliente, solicitante, arribo, fecha_hora, sku, lote, cantidad, cajas, variables_json::text
             FROM historico_impresiones
             WHERE @filtro = ''
                OR lpn ILIKE '%' || @filtro || '%'
@@ -87,6 +88,7 @@ public sealed class HistoricoService
                OR consecutivo::text ILIKE '%' || @filtro || '%'
                OR sku ILIKE '%' || @filtro || '%'
                OR lote ILIKE '%' || @filtro || '%'
+               OR cajas ILIKE '%' || @filtro || '%'
             ORDER BY fecha_hora DESC
             LIMIT @limite;
             """;
@@ -111,7 +113,8 @@ public sealed class HistoricoService
                 Sku: reader.IsDBNull(7) ? null : reader.GetString(7),
                 Lote: reader.IsDBNull(8) ? null : reader.GetString(8),
                 Cantidad: reader.IsDBNull(9) ? null : reader.GetDecimal(9),
-                VariablesJson: reader.IsDBNull(10) ? null : reader.GetString(10)));
+                Cajas: reader.IsDBNull(10) ? null : reader.GetString(10),
+                VariablesJson: reader.IsDBNull(11) ? null : reader.GetString(11)));
         }
 
         return resultado;

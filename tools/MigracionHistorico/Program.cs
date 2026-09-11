@@ -177,7 +177,7 @@ foreach (var etiqueta in etiquetas)
 
     var fechaUtc = ConvertirAUtc(etiqueta.FechaHoraTexto, offsetPiso);
 
-    string? sku = null, lote = null, variablesJson;
+    string? sku = null, lote = null, cajas = null, variablesJson;
     decimal? cantidad = null;
     string cliente;
 
@@ -186,6 +186,7 @@ foreach (var etiqueta in etiquetas)
         var (tablaElegida, fila) = ElegirCandidato(candidatos, etiqueta.Arribo);
         sku = ObtenerValor(fila, "SKU");
         lote = ObtenerValor(fila, "LOTE");
+        cajas = ObtenerValor(fila, "CAJAS");
         var cantidadTexto = ObtenerValor(fila, "CANTIDAD");
         if (decimal.TryParse(cantidadTexto, NumberStyles.Number, CultureInfo.InvariantCulture, out var c))
         {
@@ -224,6 +225,7 @@ foreach (var etiqueta in etiquetas)
         Sku: sku,
         Lote: lote,
         Cantidad: cantidad,
+        Cajas: cajas,
         VariablesJson: variablesJson));
 }
 

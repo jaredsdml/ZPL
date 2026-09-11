@@ -67,6 +67,7 @@ public sealed class LocalCacheStore
                 sku             TEXT,
                 lote            TEXT,
                 cantidad        TEXT,
+                cajas           TEXT,
                 variables_json  TEXT
             );
             """, cancellationToken);
@@ -132,8 +133,8 @@ public sealed class LocalCacheStore
             await using var cmd = connection.CreateCommand();
             cmd.Transaction = transaction;
             cmd.CommandText = """
-                INSERT INTO historico_impresiones (lpn, consecutivo, tipo, cliente, solicitante, arribo, fecha_hora, sku, lote, cantidad, variables_json)
-                VALUES ($lpn, $consecutivo, $tipo, $cliente, $solicitante, $arribo, $fecha_hora, $sku, $lote, $cantidad, $variables_json)
+                INSERT INTO historico_impresiones (lpn, consecutivo, tipo, cliente, solicitante, arribo, fecha_hora, sku, lote, cantidad, cajas, variables_json)
+                VALUES ($lpn, $consecutivo, $tipo, $cliente, $solicitante, $arribo, $fecha_hora, $sku, $lote, $cantidad, $cajas, $variables_json)
                 ON CONFLICT (lpn) DO UPDATE SET
                     consecutivo = excluded.consecutivo,
                     tipo = excluded.tipo,
@@ -144,6 +145,7 @@ public sealed class LocalCacheStore
                     sku = excluded.sku,
                     lote = excluded.lote,
                     cantidad = excluded.cantidad,
+                    cajas = excluded.cajas,
                     variables_json = excluded.variables_json;
                 """;
             cmd.Parameters.AddWithValue("$lpn", r.Lpn);
@@ -156,6 +158,7 @@ public sealed class LocalCacheStore
             cmd.Parameters.AddWithValue("$sku", (object?)r.Sku ?? DBNull.Value);
             cmd.Parameters.AddWithValue("$lote", (object?)r.Lote ?? DBNull.Value);
             cmd.Parameters.AddWithValue("$cantidad", r.Cantidad.HasValue ? r.Cantidad.Value.ToString(CultureInfo.InvariantCulture) : (object)DBNull.Value);
+            cmd.Parameters.AddWithValue("$cajas", (object?)r.Cajas ?? DBNull.Value);
             cmd.Parameters.AddWithValue("$variables_json", (object?)r.VariablesJson ?? DBNull.Value);
             await cmd.ExecuteNonQueryAsync(cancellationToken);
         }
@@ -217,7 +220,7 @@ public sealed class LocalCacheStore
         await using var connection = await AbrirConexionAsync(cancellationToken);
         await using var cmd = connection.CreateCommand();
         cmd.CommandText = """
-            SELECT lpn, consecutivo, tipo, cliente, solicitante, arribo, fecha_hora, sku, lote, cantidad, variables_json
+            SELECT lpn, consecutivo, tipo, cliente, solicitante, arribo, fecha_hora, sku, lote, cantidad, cajas, variables_json
             FROM historico_impresiones
             WHERE cliente = $cliente AND arribo = $arribo
             ORDER BY fecha_hora;
@@ -238,7 +241,7 @@ public sealed class LocalCacheStore
     /// <summary>
     /// Equivalente local (sin Neon) de HistoricoService.BuscarAsync, para cuando la estación
     /// no tiene internet: mismo criterio de búsqueda (LPN, cliente, arribo, solicitante,
-    /// tipo, consecutivo, SKU y lote).
+    /// tipo, consecutivo, SKU, lote y cajas).
     /// </summary>
     public async Task<IReadOnlyList<HistoricoImpresionRecord>> BuscarHistoricoAsync(
         string? filtro, int limite = 500, CancellationToken cancellationToken = default)
@@ -246,7 +249,7 @@ public sealed class LocalCacheStore
         await using var connection = await AbrirConexionAsync(cancellationToken);
         await using var cmd = connection.CreateCommand();
         cmd.CommandText = """
-            SELECT lpn, consecutivo, tipo, cliente, solicitante, arribo, fecha_hora, sku, lote, cantidad, variables_json
+            SELECT lpn, consecutivo, tipo, cliente, solicitante, arribo, fecha_hora, sku, lote, cantidad, cajas, variables_json
             FROM historico_impresiones
             WHERE $filtro = ''
                OR lpn LIKE '%' || $filtro || '%'
@@ -257,6 +260,7 @@ public sealed class LocalCacheStore
                OR CAST(consecutivo AS TEXT) LIKE '%' || $filtro || '%'
                OR sku LIKE '%' || $filtro || '%'
                OR lote LIKE '%' || $filtro || '%'
+               OR cajas LIKE '%' || $filtro || '%'
             ORDER BY fecha_hora DESC
             LIMIT $limite;
             """;
@@ -284,7 +288,8 @@ public sealed class LocalCacheStore
         Sku: reader.IsDBNull(7) ? null : reader.GetString(7),
         Lote: reader.IsDBNull(8) ? null : reader.GetString(8),
         Cantidad: reader.IsDBNull(9) ? null : decimal.Parse(reader.GetString(9), CultureInfo.InvariantCulture),
-        VariablesJson: reader.IsDBNull(10) ? null : reader.GetString(10));
+        Cajas: reader.IsDBNull(10) ? null : reader.GetString(10),
+        VariablesJson: reader.IsDBNull(11) ? null : reader.GetString(11));
 
     private static async Task MigrarEsquemaHistoricoAsync(SqliteConnection connection, CancellationToken cancellationToken)
     {
@@ -326,6 +331,11 @@ public sealed class LocalCacheStore
         if (!columnas.Contains("cantidad"))
         {
             await EjecutarAsync(connection, null, "ALTER TABLE historico_impresiones ADD COLUMN cantidad TEXT;", cancellationToken);
+        }
+
+        if (!columnas.Contains("cajas"))
+        {
+            await EjecutarAsync(connection, null, "ALTER TABLE historico_impresiones ADD COLUMN cajas TEXT;", cancellationToken);
         }
     }
 

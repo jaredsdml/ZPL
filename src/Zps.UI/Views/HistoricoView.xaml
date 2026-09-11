@@ -56,6 +56,7 @@
                 <DataGridTextColumn Header="SKU" Binding="{Binding Sku}" Width="130" />
                 <DataGridTextColumn Header="Lote" Binding="{Binding Lote}" Width="110" />
                 <DataGridTextColumn Header="Cantidad" Binding="{Binding Cantidad}" Width="90" />
+                <DataGridTextColumn Header="Cajas" Binding="{Binding Cajas}" Width="90" />
                 <DataGridTextColumn Header="Fecha/Hora" Binding="{Binding FechaHora}" Width="160" />
             </DataGrid.Columns>
         </DataGrid>

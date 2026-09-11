@@ -93,7 +93,8 @@ public sealed partial class HistoricoViewModel : ObservableObject
             || Coincide(registro.Solicitante, texto)
             || Coincide(registro.Tipo, texto)
             || Coincide(registro.Sku, texto)
-            || Coincide(registro.Lote, texto);
+            || Coincide(registro.Lote, texto)
+            || Coincide(registro.Cajas, texto);
     }
 
     private static bool Coincide(string? valor, string texto) =>
@@ -199,6 +200,11 @@ public sealed partial class HistoricoViewModel : ObservableObject
                     datos.TryAdd("QTY", cantidadTexto);
                 }
 
+                if (registro.Cajas is not null)
+                {
+                    datos.TryAdd("CAJAS", registro.Cajas);
+                }
+
                 var zpl = ZplTemplateEngine.Generar(cliente.PlantillaZpl, cliente.MapeoColumnas, datos, i + 1, total);
                 var resultado = await _services.Impresoras.EncolarAsync(impresora, zpl, $"Reimpresión {registro.Lpn}");
                 if (!resultado.Exito)
@@ -243,7 +249,7 @@ public sealed partial class HistoricoViewModel : ObservableObject
             using var libro = new XLWorkbook();
             var hoja = libro.Worksheets.Add("Historico");
 
-            string[] encabezados = { "LPN", "Consecutivo", "Tipo", "Cliente", "Solicitante", "Arribo", "SKU", "Lote", "Cantidad", "Fecha/Hora" };
+            string[] encabezados = { "LPN", "Consecutivo", "Tipo", "Cliente", "Solicitante", "Arribo", "SKU", "Lote", "Cantidad", "Cajas", "Fecha/Hora" };
             for (var c = 0; c < encabezados.Length; c++)
             {
                 hoja.Cell(1, c + 1).Value = encabezados[c];
@@ -276,7 +282,9 @@ public sealed partial class HistoricoViewModel : ObservableObject
                     hoja.Cell(fila, 9).Value = registro.Cantidad.Value;
                 }
 
-                var celdaFecha = hoja.Cell(fila, 10);
+                hoja.Cell(fila, 10).Value = registro.Cajas ?? string.Empty;
+
+                var celdaFecha = hoja.Cell(fila, 11);
                 celdaFecha.Value = registro.FechaHora.LocalDateTime;
                 celdaFecha.Style.DateFormat.Format = "yyyy-mm-dd hh:mm:ss";
             }

@@ -87,6 +87,7 @@ public sealed class LocalCacheStoreTests : IDisposable
             Sku: "ABC123",
             Lote: "LOTE-9",
             Cantidad: 36.50m,
+            Cajas: "NV",
             VariablesJson: "{\"SKU\":\"ABC123\",\"LOTE\":\"LOTE-9\",\"CANTIDAD\":\"36.50\",\"ATRIBUTO\":\"X\"}");
 
         await store.ReplicarHistoricoAsync(new[] { registro });
@@ -112,15 +113,15 @@ public sealed class LocalCacheStoreTests : IDisposable
             new HistoricoImpresionRecord(
                 Lpn: "LGMA20260000010", Consecutivo: 10, Tipo: "NORMAL", Cliente: "MYC",
                 Solicitante: "PRUEBA", Arribo: "ARRIBO-A", FechaHora: DateTimeOffset.UtcNow,
-                Sku: "SKU-BUSCADO", Lote: "L1", Cantidad: 5m, VariablesJson: null),
+                Sku: "SKU-BUSCADO", Lote: "L1", Cantidad: 5m, Cajas: null, VariablesJson: null),
             new HistoricoImpresionRecord(
                 Lpn: "LGMA20260000011", Consecutivo: 11, Tipo: "NORMAL", Cliente: "MYC",
                 Solicitante: "PRUEBA", Arribo: "ARRIBO-B", FechaHora: DateTimeOffset.UtcNow,
-                Sku: "OTRO-SKU", Lote: "LOTE-BUSCADO", Cantidad: 7m, VariablesJson: null),
+                Sku: "OTRO-SKU", Lote: "LOTE-BUSCADO", Cantidad: 7m, Cajas: null, VariablesJson: null),
             new HistoricoImpresionRecord(
                 Lpn: "LGMA20260000012", Consecutivo: 12, Tipo: "NORMAL", Cliente: "MYC",
                 Solicitante: "PRUEBA", Arribo: "ARRIBO-C", FechaHora: DateTimeOffset.UtcNow,
-                Sku: "NINGUNO", Lote: "NADA", Cantidad: 1m, VariablesJson: null),
+                Sku: "NINGUNO", Lote: "NADA", Cantidad: 1m, Cajas: null, VariablesJson: null),
         };
 
         await store.ReplicarHistoricoAsync(registros);

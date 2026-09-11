@@ -102,5 +102,6 @@ public sealed class HistoricoEliminarIntegrationTests : IAsyncLifetime
         Sku: "SKU-TEST",
         Lote: "LOTE-TEST",
         Cantidad: 1m,
+        Cajas: "10",
         VariablesJson: "{}");
 }

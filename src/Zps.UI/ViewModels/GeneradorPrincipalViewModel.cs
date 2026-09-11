@@ -523,6 +523,9 @@ public sealed partial class GeneradorPrincipalViewModel : ObservableObject
                 Sku: NuloSiVacio(ObtenerValorColumna(x.Fila, "SKU")),
                 Lote: NuloSiVacio(ObtenerValorColumna(x.Fila, "LOTE")),
                 Cantidad: ExtraerCantidad(x.Fila),
+                // CAJAS es texto (no numérico): algunos clientes (p. ej. AXO) capturan
+                // valores no numéricos como "NV" junto con cantidades reales.
+                Cajas: NuloSiVacio(ObtenerValorColumna(x.Fila, "CAJAS")),
                 VariablesJson: JsonSerializer.Serialize(FilaADiccionario(x.Fila))))
                 .ToList();
 
