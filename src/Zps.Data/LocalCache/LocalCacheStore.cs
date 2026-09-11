@@ -163,6 +163,24 @@ public sealed class LocalCacheStore
         await transaction.CommitAsync(cancellationToken);
     }
 
+    /// <summary>Elimina de la caché local los folios indicados (borrado seguro desde Histórico), en espejo de HistoricoService.EliminarAsync en Neon.</summary>
+    public async Task EliminarHistoricoAsync(IEnumerable<string> lpns, CancellationToken cancellationToken = default)
+    {
+        await using var connection = await AbrirConexionAsync(cancellationToken);
+        await using var transaction = connection.BeginTransaction();
+
+        foreach (var lpn in lpns)
+        {
+            await using var cmd = connection.CreateCommand();
+            cmd.Transaction = transaction;
+            cmd.CommandText = "DELETE FROM historico_impresiones WHERE lpn = $lpn;";
+            cmd.Parameters.AddWithValue("$lpn", lpn);
+            await cmd.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+    }
+
     public async Task<IReadOnlyList<ClienteCatalogoRecord>> ObtenerClientesAsync(CancellationToken cancellationToken = default)
     {
         await using var connection = await AbrirConexionAsync(cancellationToken);

@@ -79,7 +79,9 @@
                         <ColumnDefinition Width="12" />
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="12" />
-                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="8" />
+                        <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
@@ -95,7 +97,12 @@
                     <TextBlock Grid.Row="0" Grid.Column="4" Text="Arribo / PO" Style="{StaticResource SubtleTextBlock}" />
                     <TextBox Grid.Row="1" Grid.Column="4" Text="{Binding Arribo, UpdateSourceTrigger=PropertyChanged}" />
 
-                    <Button Grid.Row="1" Grid.Column="6" Content="⚡ Generar e Imprimir"
+                    <Button Grid.Row="1" Grid.Column="6" Style="{StaticResource SecondaryButton}"
+                            Content="📦 Generar sin Imprimir"
+                            ToolTip="Reserva folios, valida y guarda en Histórico sin enviar nada a una impresora. Útil en estaciones sin Zebra conectada."
+                            Command="{Binding GenerarSinImprimirCommand}" />
+
+                    <Button Grid.Row="1" Grid.Column="8" Content="⚡ Generar e Imprimir"
                             Command="{Binding GenerarEImprimirCommand}" />
                 </Grid>
             </Border>

@@ -116,4 +116,22 @@ public sealed class HistoricoService
 
         return resultado;
     }
+
+    /// <summary>
+    /// Elimina permanentemente los folios indicados de historico_impresiones (borrado
+    /// seguro desde la pestaña de Histórico, protegido por contraseña en la UI). Devuelve
+    /// la cantidad de filas realmente borradas.
+    /// </summary>
+    public async Task<int> EliminarAsync(IReadOnlyCollection<string> lpns, CancellationToken cancellationToken = default)
+    {
+        if (lpns.Count == 0)
+        {
+            return 0;
+        }
+
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
+        await using var command = new NpgsqlCommand("DELETE FROM historico_impresiones WHERE lpn = ANY(@lpns);", connection);
+        command.Parameters.AddWithValue("lpns", lpns.ToArray());
+        return await command.ExecuteNonQueryAsync(cancellationToken);
+    }
 }

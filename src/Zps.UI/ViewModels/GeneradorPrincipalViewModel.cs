@@ -55,6 +55,7 @@ public sealed partial class GeneradorPrincipalViewModel : ObservableObject
 
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(GenerarEImprimirCommand))]
+    [NotifyCanExecuteChangedFor(nameof(GenerarSinImprimirCommand))]
     [NotifyPropertyChangedFor(nameof(ClienteActivoTexto))]
     private ClienteCatalogoRecord? _clienteSeleccionado;
 
@@ -74,6 +75,7 @@ public sealed partial class GeneradorPrincipalViewModel : ObservableObject
 
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(GenerarEImprimirCommand))]
+    [NotifyCanExecuteChangedFor(nameof(GenerarSinImprimirCommand))]
     private DataTable? _datosExcel;
 
     [ObservableProperty]
@@ -96,6 +98,7 @@ public sealed partial class GeneradorPrincipalViewModel : ObservableObject
 
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(GenerarEImprimirCommand))]
+    [NotifyCanExecuteChangedFor(nameof(GenerarSinImprimirCommand))]
     private bool _estaOcupado;
 
     [ObservableProperty]
@@ -212,6 +215,7 @@ public sealed partial class GeneradorPrincipalViewModel : ObservableObject
         if (e.Column?.ColumnName == "_Seleccionado")
         {
             GenerarEImprimirCommand.NotifyCanExecuteChanged();
+            GenerarSinImprimirCommand.NotifyCanExecuteChanged();
         }
     }
 
@@ -378,15 +382,37 @@ public sealed partial class GeneradorPrincipalViewModel : ObservableObject
         HayFilasSeleccionadas() &&
         !EstaOcupado;
 
+    /// <summary>
+    /// "Generar sin Imprimir" no requiere ninguna impresora seleccionada: pensado para una
+    /// estación remota sin Zebra conectada, que solo necesita reservar folios, validar y
+    /// dejar los registros listos en historico_impresiones para que otra estación (la que
+    /// sí tiene la impresora física) los busque y reimprima.
+    /// </summary>
+    private bool PuedeGenerarSinImprimir() =>
+        ClienteSeleccionado is not null &&
+        HayFilasSeleccionadas() &&
+        !EstaOcupado;
+
     private bool HayFilasSeleccionadas() =>
         DatosExcel is not null &&
         DatosExcel.Rows.Cast<DataRow>().Any(fila => fila["_Seleccionado"] is bool marcada && marcada);
 
     [RelayCommand(CanExecute = nameof(PuedeGenerar))]
-    private async Task GenerarEImprimirAsync()
+    private Task GenerarEImprimirAsync() => EjecutarGeneracionAsync(despacharAImpresora: true);
+
+    [RelayCommand(CanExecute = nameof(PuedeGenerarSinImprimir))]
+    private Task GenerarSinImprimirAsync() => EjecutarGeneracionAsync(despacharAImpresora: false);
+
+    private async Task EjecutarGeneracionAsync(bool despacharAImpresora)
     {
-        if (DatosExcel is null || ClienteSeleccionado is null || string.IsNullOrWhiteSpace(ImpresoraSeleccionada))
+        if (DatosExcel is null || ClienteSeleccionado is null)
         {
+            return;
+        }
+
+        if (despacharAImpresora && string.IsNullOrWhiteSpace(ImpresoraSeleccionada))
+        {
+            EstadoMensaje = "Selecciona una impresora, o usa 'Generar sin Imprimir' si esta estación no tiene una Zebra conectada.";
             return;
         }
 
@@ -506,64 +532,74 @@ public sealed partial class GeneradorPrincipalViewModel : ObservableObject
             var total = filas.Count;
             var totalHojaCompleta = todasLasFilas.Count;
             var errores = 0;
-            var esImpresoraVirtual = string.Equals(ImpresoraSeleccionada, ImpresoraVirtualNombre, StringComparison.Ordinal);
+            var esImpresoraVirtual = despacharAImpresora && string.Equals(ImpresoraSeleccionada, ImpresoraVirtualNombre, StringComparison.Ordinal);
             var auditoriaVirtual = esImpresoraVirtual ? new List<AuditoriaEtiqueta>(total) : null;
 
             for (var i = 0; i < infoPorFila.Count; i++)
             {
                 var fila = infoPorFila[i].Fila;
 
-                // Indexado especial de bultos: MYC renumera relativo al lote que se imprime
-                // ahora mismo (1..N seleccionadas); el resto de clientes usa la posición
-                // absoluta de la fila y el tamaño de la hoja completa (aunque se imprima
-                // solo un subconjunto), igual que en run_print/confirmar_print del original.
-                int indiceParaZpl;
-                int totalParaZpl;
-                if (esMyc)
+                // "Generar sin Imprimir": el folio ya quedó reservado y guardado en
+                // historico_impresiones arriba; no hace falta generar ZPL ni tocar ninguna
+                // impresora (real o virtual) — otra estación con la Zebra conectada lo
+                // reimprimirá después desde la pestaña Histórico.
+                if (despacharAImpresora)
                 {
-                    indiceParaZpl = i + 1;
-                    totalParaZpl = total;
-                }
-                else
-                {
-                    indiceParaZpl = indiceAbsolutoPorFila[fila];
-                    totalParaZpl = totalHojaCompleta;
-                }
-
-                var datos = FilaADiccionario(fila);
-                var zpl = ZplTemplateEngine.Generar(
-                    ClienteSeleccionado.PlantillaZpl ?? string.Empty,
-                    ClienteSeleccionado.MapeoColumnas,
-                    datos,
-                    indiceParaZpl,
-                    totalParaZpl);
-
-                if (esImpresoraVirtual)
-                {
-                    // Modo auditoría: nunca toca el spooler real; renderiza vía Labelary
-                    // para revisión visual, con la reserva de folios y el guardado en
-                    // histórico ya hechos exactamente igual que en una impresión real.
-                    var resultadoPreview = await _services.Preview.GenerarVistaPreviaAsync(zpl);
-                    auditoriaVirtual!.Add(new AuditoriaEtiqueta(
-                        folioPorFila[fila],
-                        resultadoPreview.Exito ? resultadoPreview.ImagenPng : null,
-                        resultadoPreview.Exito ? null : resultadoPreview.Error));
-                }
-                else
-                {
-                    var resultado = await _services.Impresoras.EncolarAsync(ImpresoraSeleccionada!, zpl, $"LPN {folioPorFila[fila]}");
-                    if (!resultado.Exito)
+                    // Indexado especial de bultos: MYC renumera relativo al lote que se
+                    // imprime ahora mismo (1..N seleccionadas); el resto de clientes usa la
+                    // posición absoluta de la fila y el tamaño de la hoja completa (aunque
+                    // se imprima solo un subconjunto), igual que run_print/confirmar_print
+                    // en app_centralizada.py.
+                    int indiceParaZpl;
+                    int totalParaZpl;
+                    if (esMyc)
                     {
-                        errores++;
+                        indiceParaZpl = i + 1;
+                        totalParaZpl = total;
+                    }
+                    else
+                    {
+                        indiceParaZpl = indiceAbsolutoPorFila[fila];
+                        totalParaZpl = totalHojaCompleta;
+                    }
+
+                    var datos = FilaADiccionario(fila);
+                    var zpl = ZplTemplateEngine.Generar(
+                        ClienteSeleccionado.PlantillaZpl ?? string.Empty,
+                        ClienteSeleccionado.MapeoColumnas,
+                        datos,
+                        indiceParaZpl,
+                        totalParaZpl);
+
+                    if (esImpresoraVirtual)
+                    {
+                        // Modo auditoría: nunca toca el spooler real; renderiza vía Labelary
+                        // para revisión visual, con la reserva de folios y el guardado en
+                        // histórico ya hechos exactamente igual que en una impresión real.
+                        var resultadoPreview = await _services.Preview.GenerarVistaPreviaAsync(zpl);
+                        auditoriaVirtual!.Add(new AuditoriaEtiqueta(
+                            folioPorFila[fila],
+                            resultadoPreview.Exito ? resultadoPreview.ImagenPng : null,
+                            resultadoPreview.Exito ? null : resultadoPreview.Error));
+                    }
+                    else
+                    {
+                        var resultado = await _services.Impresoras.EncolarAsync(ImpresoraSeleccionada!, zpl, $"LPN {folioPorFila[fila]}");
+                        if (!resultado.Exito)
+                        {
+                            errores++;
+                        }
                     }
                 }
 
                 Progreso = (i + 1) / (double)total;
             }
 
-            EstadoMensaje = esImpresoraVirtual
-                ? $"Proceso terminado (modo virtual): {total} etiqueta(s) generadas y guardadas en histórico, ninguna enviada a una impresora real."
-                : $"Proceso terminado: {total} etiqueta(s), {errores} error(es).";
+            EstadoMensaje = !despacharAImpresora
+                ? $"Proceso terminado: {total} etiqueta(s) generadas y guardadas en histórico (sin imprimir). Ya están disponibles para buscarlas y reimprimirlas desde la pestaña Histórico."
+                : esImpresoraVirtual
+                    ? $"Proceso terminado (modo virtual): {total} etiqueta(s) generadas y guardadas en histórico, ninguna enviada a una impresora real."
+                    : $"Proceso terminado: {total} etiqueta(s), {errores} error(es).";
             VistaDatos = DatosExcel.DefaultView;
 
             if (filas.Count > 0)

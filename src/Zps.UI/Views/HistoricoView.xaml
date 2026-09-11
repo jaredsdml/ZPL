@@ -24,6 +24,8 @@
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="12" />
                     <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="12" />
+                    <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
 
                 <TextBox Grid.Column="0"
@@ -34,6 +36,7 @@
                 <Button Grid.Column="2" Content="🔄 Sincronizar (F5)" Command="{Binding SincronizarCommand}" />
                 <Button Grid.Column="4" Style="{StaticResource SecondaryButton}" Content="🖨️ Reimprimir Selección" Command="{Binding ReimprimirSeleccionCommand}" />
                 <Button Grid.Column="6" Style="{StaticResource SecondaryButton}" Content="📥 Exportar a Excel" Command="{Binding ExportarExcelCommand}" />
+                <Button Grid.Column="8" Style="{StaticResource DangerButton}" Content="🗑️ Eliminar Selección" Command="{Binding EliminarSeleccionCommand}" />
             </Grid>
         </Border>
 

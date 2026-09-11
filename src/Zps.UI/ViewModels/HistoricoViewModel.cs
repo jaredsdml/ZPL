@@ -3,6 +3,7 @@ using System.ComponentModel;
 using System.Globalization;
 using System.IO;
 using System.Text.Json;
+using System.Windows;
 using System.Windows.Data;
 using ClosedXML.Excel;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -10,6 +11,7 @@ using CommunityToolkit.Mvvm.Input;
 using Zps.Core;
 using Zps.Data.Models;
 using Zps.UI.Services;
+using Zps.UI.Views;
 
 namespace Zps.UI.ViewModels;
 
@@ -43,6 +45,7 @@ public sealed partial class HistoricoViewModel : ObservableObject
 
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(ExportarExcelCommand))]
+    [NotifyCanExecuteChangedFor(nameof(EliminarSeleccionCommand))]
     private bool _estaOcupado;
 
     private IReadOnlyList<HistoricoImpresionRecord> _seleccionados = Array.Empty<HistoricoImpresionRecord>();
@@ -61,6 +64,7 @@ public sealed partial class HistoricoViewModel : ObservableObject
     {
         _seleccionados = seleccionados;
         ReimprimirSeleccionCommand.NotifyCanExecuteChanged();
+        EliminarSeleccionCommand.NotifyCanExecuteChanged();
     }
 
     partial void OnBusquedaTextoChanged(string value)
@@ -334,5 +338,63 @@ public sealed partial class HistoricoViewModel : ObservableObject
         var invalidos = Path.GetInvalidFileNameChars();
         var limpio = new string(nombre.Select(c => invalidos.Contains(c) ? '_' : c).ToArray());
         return limpio.Trim();
+    }
+
+    private bool PuedeEliminar() => _seleccionados.Count > 0 && !EstaOcupado;
+
+    /// <summary>
+    /// Borrado seguro: exige confirmar con contraseña antes de eliminar permanentemente
+    /// los registros seleccionados de Neon y de la caché local. Un intento de contraseña
+    /// incorrecto cancela toda la operación (sin reintentos).
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(PuedeEliminar))]
+    private async Task EliminarSeleccionAsync()
+    {
+        if (_seleccionados.Count == 0)
+        {
+            return;
+        }
+
+        var dialogo = new ConfirmacionPasswordWindow { Owner = Application.Current.MainWindow };
+        if (dialogo.ShowDialog() != true)
+        {
+            return; // cancelado o contraseña incorrecta: no se elimina nada
+        }
+
+        EstaOcupado = true;
+        try
+        {
+            var lpns = _seleccionados.Select(r => r.Lpn).ToList();
+
+            if (_services.Historico is not null)
+            {
+                await _services.Historico.EliminarAsync(lpns);
+            }
+
+            await _services.CacheLocal.EliminarHistoricoAsync(lpns);
+
+            foreach (var lpn in lpns)
+            {
+                var registro = Registros.FirstOrDefault(r => r.Lpn == lpn);
+                if (registro is not null)
+                {
+                    Registros.Remove(registro);
+                }
+            }
+
+            _seleccionados = Array.Empty<HistoricoImpresionRecord>();
+            EstadoMensaje = $"Se eliminaron {lpns.Count} registro(s) de Neon y de la caché local.";
+        }
+        catch (Exception ex)
+        {
+            EstadoMensaje = $"No se pudo completar la eliminación: {ex.Message}";
+        }
+        finally
+        {
+            EstaOcupado = false;
+            ReimprimirSeleccionCommand.NotifyCanExecuteChanged();
+            EliminarSeleccionCommand.NotifyCanExecuteChanged();
+            ExportarExcelCommand.NotifyCanExecuteChanged();
+        }
     }
 }
