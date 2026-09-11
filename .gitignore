@@ -11,3 +11,8 @@ to do.*
 dist/
 build/
 app.pyc_Decompiled.py
+
+# .NET
+bin/
+obj/
+*.user

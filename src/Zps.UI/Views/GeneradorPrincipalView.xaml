@@ -1,0 +1,169 @@
+<UserControl x:Class="Zps.UI.Views.GeneradorPrincipalView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:Zps.UI.ViewModels"
+             d:DataContext="{d:DesignInstance vm:GeneradorPrincipalViewModel}"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             mc:Ignorable="d">
+
+    <Grid Margin="16">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="3*" />
+            <ColumnDefinition Width="16" />
+            <ColumnDefinition Width="2*" />
+        </Grid.ColumnDefinitions>
+
+        <!-- Columna izquierda: controles + tabla -->
+        <Grid Grid.Column="0">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <!-- Selectores: la Hoja de Excel es el único selector maestro de contexto;
+                 el cliente se resuelve automáticamente contra cat_clientes y solo se
+                 muestra un selector editable si la hoja no coincide con ningún cliente. -->
+            <Border Grid.Row="0" Style="{StaticResource CardBorder}" Margin="0,0,0,12">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="12" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Impresora" Style="{StaticResource SubtleTextBlock}" />
+                    <ComboBox Grid.Row="1" Grid.Column="0"
+                              ItemsSource="{Binding Impresoras}"
+                              SelectedItem="{Binding ImpresoraSeleccionada}" />
+
+                    <TextBlock Grid.Row="0" Grid.Column="2" Text="Hoja de Excel (define el cliente automáticamente)" Style="{StaticResource SubtleTextBlock}" />
+                    <ComboBox Grid.Row="1" Grid.Column="2"
+                              ItemsSource="{Binding Hojas}"
+                              SelectedItem="{Binding HojaSeleccionada}" />
+
+                    <TextBlock Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="3" Margin="0,10,0,0">
+                        <Run Text="Cliente activo: " Foreground="{DynamicResource SecondaryTextBrush}" FontSize="11" />
+                        <Run Text="{Binding ClienteActivoTexto, Mode=OneWay}" FontWeight="SemiBold" />
+                    </TextBlock>
+
+                    <!-- Selector de excepción: solo visible cuando la hoja no mapea a ningún cliente. -->
+                    <StackPanel Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="3" Orientation="Horizontal" Margin="0,8,0,0"
+                                Visibility="{Binding RequiereSeleccionManualDeCliente, Converter={StaticResource BooleanToVisibilityConverter}}">
+                        <TextBlock Text="⚠️ Cliente no identificado — elige uno manualmente:" VerticalAlignment="Center" Margin="0,0,10,0" />
+                        <ComboBox Width="220"
+                                  ItemsSource="{Binding Clientes}"
+                                  SelectedItem="{Binding ClienteSeleccionado}"
+                                  DisplayMemberPath="Nombre" />
+                    </StackPanel>
+                </Grid>
+            </Border>
+
+            <!-- Archivo + metadatos -->
+            <Border Grid.Row="1" Style="{StaticResource CardBorder}" Margin="0,0,0,12">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="12" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="12" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="12" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <Button Grid.Row="1" Grid.Column="0" Content="📂 Abrir Excel" Command="{Binding CargarExcelCommand}" />
+                    <TextBlock Grid.Row="0" Grid.ColumnSpan="2" Text="{Binding NombreArchivo}" Style="{StaticResource SubtleTextBlock}" VerticalAlignment="Bottom" Margin="0,0,0,4" />
+
+                    <TextBlock Grid.Row="0" Grid.Column="2" Text="Solicitante" Style="{StaticResource SubtleTextBlock}" />
+                    <TextBox Grid.Row="1" Grid.Column="2" Text="{Binding Solicitante, UpdateSourceTrigger=PropertyChanged}" />
+
+                    <TextBlock Grid.Row="0" Grid.Column="4" Text="Arribo / PO" Style="{StaticResource SubtleTextBlock}" />
+                    <TextBox Grid.Row="1" Grid.Column="4" Text="{Binding Arribo, UpdateSourceTrigger=PropertyChanged}" />
+
+                    <Button Grid.Row="1" Grid.Column="6" Content="⚡ Generar e Imprimir"
+                            Command="{Binding GenerarEImprimirCommand}" />
+                </Grid>
+            </Border>
+
+            <!-- Tabla de datos -->
+            <DataGrid Grid.Row="2"
+                      x:Name="DataGridDatos"
+                      ItemsSource="{Binding VistaDatos}"
+                      SelectedItem="{Binding FilaSeleccionada}"
+                      IsReadOnly="False"
+                      AutoGenerateColumns="True"
+                      AutoGeneratingColumn="DataGridDatos_OnAutoGeneratingColumn">
+                <DataGrid.Columns>
+                    <DataGridCheckBoxColumn Width="80" MinWidth="70" IsReadOnly="False"
+                                            Binding="{Binding Path=[_Seleccionado], Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}">
+                        <DataGridCheckBoxColumn.Header>
+                            <CheckBox x:Name="ChkSeleccionarTodos"
+                                      Content="✔ Todos"
+                                      MinWidth="70"
+                                      IsChecked="True"
+                                      Click="ChkSeleccionarTodos_OnClick"
+                                      ToolTip="Marca o desmarca todas las filas" />
+                        </DataGridCheckBoxColumn.Header>
+                    </DataGridCheckBoxColumn>
+                </DataGrid.Columns>
+                <DataGrid.RowStyle>
+                    <Style TargetType="DataGridRow">
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding Path=[_EsValido]}" Value="False">
+                                <Setter Property="Background" Value="{DynamicResource RowInvalidBrush}" />
+                                <Setter Property="ToolTip" Value="{Binding Path=[_MensajeError]}" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </DataGrid.RowStyle>
+            </DataGrid>
+
+            <ProgressBar Grid.Row="3" Height="6" Margin="0,10,0,4" Value="{Binding Progreso, Mode=OneWay}" Maximum="1" />
+
+            <TextBlock Grid.Row="4" Text="{Binding EstadoMensaje}" TextWrapping="Wrap" Margin="0,0,0,4" />
+
+            <TextBlock Grid.Row="5" Style="{StaticResource SubtleTextBlock}"
+                       Text="Las filas resaltadas en rojo no cumplen las reglas de Categoría/Motivo de MINISO." />
+        </Grid>
+
+        <!-- Columna derecha: vista previa -->
+        <Border Grid.Column="2" Style="{StaticResource CardBorder}">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+
+                <TextBlock Grid.Row="0" Text="VISTA PREVIA EN VIVO" Style="{StaticResource SectionTitle}" HorizontalAlignment="Center" />
+
+                <Grid Grid.Row="1">
+                    <TextBlock Text="Selecciona una fila para previsualizar"
+                               Style="{StaticResource SubtleTextBlock}"
+                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                               TextWrapping="Wrap"
+                               Visibility="{Binding ImagenPreview, Converter={StaticResource NullToVisibilityConverter}, ConverterParameter=Invert}" />
+
+                    <Image Source="{Binding ImagenPreview, Converter={StaticResource ByteArrayToImageConverter}}"
+                           Stretch="Uniform"
+                           VerticalAlignment="Top"
+                           Visibility="{Binding ImagenPreview, Converter={StaticResource NullToVisibilityConverter}}" />
+                </Grid>
+            </Grid>
+        </Border>
+    </Grid>
+</UserControl>

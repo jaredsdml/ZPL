@@ -1,0 +1,52 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "9.0.x"
+
+      - name: Publish Zps.UI (self-contained, single file, win-x64)
+        run: >
+          dotnet publish src/Zps.UI/Zps.UI.csproj -c Release -r win-x64
+          --self-contained true
+          -p:PublishSingleFile=true
+          -o ./publish
+
+      - name: Package as .zip
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $zipName = "ZPS-$tag-win-x64.zip"
+          Compress-Archive -Path "./publish/*" -DestinationPath $zipName
+          echo "ZIP_NAME=$zipName" >> $env:GITHUB_ENV
+
+      - name: Generate SHA-256 checksum
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash -Path $env:ZIP_NAME -Algorithm SHA256).Hash.ToLower()
+          "$hash  $env:ZIP_NAME" | Out-File -FilePath "$($env:ZIP_NAME).sha256" -Encoding ascii -NoNewline
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          # Zps.UpdateInstaller busca este mismo asset .sha256 (mismo nombre + ".sha256")
+          # para validar la integridad del paquete antes de reemplazar archivos.
+          files: |
+            ZPS-*.zip
+            ZPS-*.zip.sha256
+          generate_release_notes: true

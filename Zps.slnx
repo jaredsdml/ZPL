@@ -1,0 +1,15 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Zps.Core/Zps.Core.csproj" />
+    <Project Path="src/Zps.Data/Zps.Data.csproj" />
+    <Project Path="src/Zps.Hardware/Zps.Hardware.csproj" />
+    <Project Path="src/Zps.UI/Zps.UI.csproj" />
+    <Project Path="src/Zps.Updater/Zps.Updater.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Zps.Core.Tests/Zps.Core.Tests.csproj" />
+    <Project Path="tests/Zps.Data.IntegrationTests/Zps.Data.IntegrationTests.csproj" />
+    <Project Path="tests/Zps.Hardware.Tests/Zps.Hardware.Tests.csproj" />
+    <Project Path="tests/Zps.Updater.Tests/Zps.Updater.Tests.csproj" />
+  </Folder>
+</Solution>
