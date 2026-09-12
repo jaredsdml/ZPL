@@ -85,6 +85,8 @@ public sealed class ExtremoAExtremoIntegrationTests : IAsyncLifetime
                     Lote: "LOTE-E2E",
                     Cantidad: n,
                     Cajas: "CAJA-E2E",
+                    TarimaActual: n,
+                    TarimaTotal: esperados,
                     VariablesJson: $$"""{"consecutivo": {{n}} }"""))
                 .ToList();
 

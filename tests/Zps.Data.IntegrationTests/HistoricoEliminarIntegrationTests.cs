@@ -103,5 +103,7 @@ public sealed class HistoricoEliminarIntegrationTests : IAsyncLifetime
         Lote: "LOTE-TEST",
         Cantidad: 1m,
         Cajas: "10",
+        TarimaActual: 1,
+        TarimaTotal: 1,
         VariablesJson: "{}");
 }

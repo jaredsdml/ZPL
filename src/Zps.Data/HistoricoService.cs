@@ -36,8 +36,8 @@ public sealed class HistoricoService
         {
             var comando = new NpgsqlBatchCommand(
                 """
-                INSERT INTO historico_impresiones (lpn, consecutivo, tipo, cliente, solicitante, arribo, fecha_hora, sku, lote, cantidad, cajas, variables_json)
-                VALUES (@lpn, @consecutivo, @tipo, @cliente, @solicitante, @arribo, @fecha_hora, @sku, @lote, @cantidad, @cajas, @variables_json)
+                INSERT INTO historico_impresiones (lpn, consecutivo, tipo, cliente, solicitante, arribo, fecha_hora, sku, lote, cantidad, cajas, tarima_actual, tarima_total, variables_json)
+                VALUES (@lpn, @consecutivo, @tipo, @cliente, @solicitante, @arribo, @fecha_hora, @sku, @lote, @cantidad, @cajas, @tarima_actual, @tarima_total, @variables_json)
                 ON CONFLICT (lpn) DO NOTHING;
                 """);
             comando.Parameters.AddWithValue("lpn", r.Lpn);
@@ -54,6 +54,8 @@ public sealed class HistoricoService
             comando.Parameters.AddWithValue("lote", (object?)r.Lote ?? DBNull.Value);
             comando.Parameters.AddWithValue("cantidad", (object?)r.Cantidad ?? DBNull.Value);
             comando.Parameters.AddWithValue("cajas", (object?)r.Cajas ?? DBNull.Value);
+            comando.Parameters.AddWithValue("tarima_actual", (object?)r.TarimaActual ?? DBNull.Value);
+            comando.Parameters.AddWithValue("tarima_total", (object?)r.TarimaTotal ?? DBNull.Value);
             comando.Parameters.Add(new NpgsqlParameter("variables_json", NpgsqlDbType.Jsonb)
             {
                 Value = (object?)r.VariablesJson ?? DBNull.Value
@@ -77,7 +79,7 @@ public sealed class HistoricoService
         CancellationToken cancellationToken = default)
     {
         const string sql = """
-            SELECT lpn, consecutivo, tipo, cliente, solicitante, arribo, fecha_hora, sku, lote, cantidad, cajas, variables_json::text
+            SELECT lpn, consecutivo, tipo, cliente, solicitante, arribo, fecha_hora, sku, lote, cantidad, cajas, tarima_actual, tarima_total, variables_json::text
             FROM historico_impresiones
             WHERE @filtro = ''
                OR lpn ILIKE '%' || @filtro || '%'
@@ -114,10 +116,90 @@ public sealed class HistoricoService
                 Lote: reader.IsDBNull(8) ? null : reader.GetString(8),
                 Cantidad: reader.IsDBNull(9) ? null : reader.GetDecimal(9),
                 Cajas: reader.IsDBNull(10) ? null : reader.GetString(10),
-                VariablesJson: reader.IsDBNull(11) ? null : reader.GetString(11)));
+                TarimaActual: reader.IsDBNull(11) ? null : reader.GetInt32(11),
+                TarimaTotal: reader.IsDBNull(12) ? null : reader.GetInt32(12),
+                VariablesJson: reader.IsDBNull(13) ? null : reader.GetString(13)));
         }
 
         return resultado;
+    }
+
+    /// <summary>
+    /// Aplica una edición de campos operativos (Sku/Lote/Cantidad) a un folio ya impreso y
+    /// dentro de la misma transacción registra cada cambio en historico_cambios_log, para
+    /// la acción "Editar y Reimprimir" de la pestaña Histórico. No toca consecutivo, cajas,
+    /// tarima_actual/tarima_total ni variables_json: la reimpresión posterior sigue usando
+    /// el TarimaActual/TarimaTotal originales para no alterar el "X de N" ya impreso.
+    /// </summary>
+    public async Task ActualizarConAuditoriaAsync(
+        HistoricoImpresionRecord actualizado,
+        IReadOnlyList<CambioCampo> cambios,
+        string usuario,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+
+        long historicoId;
+        await using (var comandoUpdate = new NpgsqlCommand(
+            """
+            UPDATE historico_impresiones
+            SET sku = @sku, lote = @lote, cantidad = @cantidad, cajas = @cajas
+            WHERE lpn = @lpn
+            RETURNING id;
+            """, connection, transaction))
+        {
+            comandoUpdate.Parameters.AddWithValue("sku", (object?)actualizado.Sku ?? DBNull.Value);
+            comandoUpdate.Parameters.AddWithValue("lote", (object?)actualizado.Lote ?? DBNull.Value);
+            comandoUpdate.Parameters.AddWithValue("cantidad", (object?)actualizado.Cantidad ?? DBNull.Value);
+            comandoUpdate.Parameters.AddWithValue("cajas", (object?)actualizado.Cajas ?? DBNull.Value);
+            comandoUpdate.Parameters.AddWithValue("lpn", actualizado.Lpn);
+            var resultado = await comandoUpdate.ExecuteScalarAsync(cancellationToken);
+            if (resultado is null)
+            {
+                throw new InvalidOperationException($"No existe el folio '{actualizado.Lpn}' en historico_impresiones.");
+            }
+
+            historicoId = (long)resultado;
+        }
+
+        foreach (var cambio in cambios)
+        {
+            await using var comandoLog = new NpgsqlCommand(
+                """
+                INSERT INTO historico_cambios_log (historico_id, lpn, campo_modificado, valor_anterior, valor_nuevo, usuario, fecha_cambio)
+                VALUES (@historico_id, @lpn, @campo, @anterior, @nuevo, @usuario, @fecha);
+                """, connection, transaction);
+            comandoLog.Parameters.AddWithValue("historico_id", historicoId);
+            comandoLog.Parameters.AddWithValue("lpn", actualizado.Lpn);
+            comandoLog.Parameters.AddWithValue("campo", cambio.Campo);
+            comandoLog.Parameters.AddWithValue("anterior", (object?)cambio.ValorAnterior ?? DBNull.Value);
+            comandoLog.Parameters.AddWithValue("nuevo", (object?)cambio.ValorNuevo ?? DBNull.Value);
+            comandoLog.Parameters.AddWithValue("usuario", usuario);
+            comandoLog.Parameters.AddWithValue("fecha", DateTimeOffset.UtcNow);
+            await comandoLog.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Corrige tarima_actual/tarima_total de un folio ya guardado, sin tocar ningún otro
+    /// campo ni registrar auditoría: es la regla crítica del botón "Imprimir" del Generador
+    /// Principal — si el operador partió el lote (recalculó el "X de N" respecto a lo ya
+    /// guardado), la base de datos debe reflejar exactamente cómo salió la etiqueta física.
+    /// </summary>
+    public async Task ActualizarTarimaAsync(
+        string lpn, int tarimaActual, int tarimaTotal, CancellationToken cancellationToken = default)
+    {
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
+        await using var command = new NpgsqlCommand(
+            "UPDATE historico_impresiones SET tarima_actual = @tarima_actual, tarima_total = @tarima_total WHERE lpn = @lpn;",
+            connection);
+        command.Parameters.AddWithValue("tarima_actual", tarimaActual);
+        command.Parameters.AddWithValue("tarima_total", tarimaTotal);
+        command.Parameters.AddWithValue("lpn", lpn);
+        await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
     /// <summary>

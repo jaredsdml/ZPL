@@ -9,6 +9,12 @@ namespace Zps.Data.Models;
 /// 'etiquetas' de logam_sistema.db y de las tablas por-cliente de logam_reimpresiones.db
 /// en el original. Cajas es texto (no numérico) porque algunos clientes (p. ej. AXO)
 /// capturan valores no numéricos como "NV" junto con cantidades reales.
+///
+/// TarimaActual/TarimaTotal son los valores {INDICE}/{TOTAL} realmente grabados en el ZPL
+/// impreso originalmente (según el checkbox "Impresión por lotes" y el cliente): se
+/// conservan aparte de Consecutivo (folio/secuencia LPN) para que una reimpresión posterior
+/// — incluida una reimpresión tras editar Sku/Lote/Cantidad — muestre el mismo "X de N" que
+/// la etiqueta original, en vez de recalcularlo según la selección vigente en ese momento.
 /// </summary>
 public sealed record HistoricoImpresionRecord(
     string Lpn,
@@ -22,4 +28,6 @@ public sealed record HistoricoImpresionRecord(
     string? Lote,
     decimal? Cantidad,
     string? Cajas,
+    int? TarimaActual,
+    int? TarimaTotal,
     string? VariablesJson);

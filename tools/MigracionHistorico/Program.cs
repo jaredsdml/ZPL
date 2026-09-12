@@ -226,6 +226,8 @@ foreach (var etiqueta in etiquetas)
         Lote: lote,
         Cantidad: cantidad,
         Cajas: cajas,
+        TarimaActual: null,
+        TarimaTotal: null,
         VariablesJson: variablesJson));
 }
 

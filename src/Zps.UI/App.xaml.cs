@@ -23,6 +23,7 @@ public partial class App : Application
         ConsecutivosService? consecutivos = null;
         HistoricoService? historico = null;
         CatalogoClientesService? catalogo = null;
+        PlantillasService? plantillas = null;
         string? errorNeon = null;
 
         try
@@ -32,6 +33,7 @@ public partial class App : Application
             consecutivos = new ConsecutivosService(dataSource);
             historico = new HistoricoService(dataSource);
             catalogo = new CatalogoClientesService(dataSource);
+            plantillas = new PlantillasService(dataSource);
         }
         catch (Exception ex)
         {
@@ -56,6 +58,7 @@ public partial class App : Application
             Consecutivos = consecutivos,
             Historico = historico,
             CatalogoClientes = catalogo,
+            Plantillas = plantillas,
             CacheLocal = cacheLocal,
             Impresoras = new PrinterService(),
             Preview = new LabelaryPreviewService(),

@@ -86,6 +86,7 @@
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
 
                     <Button Grid.Row="1" Grid.Column="0" Content="📂 Abrir Excel" Command="{Binding CargarExcelCommand}" />
@@ -97,13 +98,29 @@
                     <TextBlock Grid.Row="0" Grid.Column="4" Text="Arribo / PO" Style="{StaticResource SubtleTextBlock}" />
                     <TextBox Grid.Row="1" Grid.Column="4" Text="{Binding Arribo, UpdateSourceTrigger=PropertyChanged}" />
 
-                    <Button Grid.Row="1" Grid.Column="6" Style="{StaticResource SecondaryButton}"
-                            Content="📦 Generar sin Imprimir"
-                            ToolTip="Reserva folios, valida y guarda en Histórico sin enviar nada a una impresora. Útil en estaciones sin Zebra conectada."
-                            Command="{Binding GenerarSinImprimirCommand}" />
+                    <Button Grid.Row="1" Grid.Column="6"
+                            Content="{Binding TextoBotonPrincipal}"
+                            ToolTip="Generar: reserva LPNs y los muestra en el grid. Guardar: calcula la tarima y los inserta en Histórico."
+                            Command="{Binding GenerarOGuardarCommand}">
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding EstaListoParaGuardar}" Value="True">
+                                        <Setter Property="Background" Value="Orange" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                    </Button>
 
-                    <Button Grid.Row="1" Grid.Column="8" Content="⚡ Generar e Imprimir"
-                            Command="{Binding GenerarEImprimirCommand}" />
+                    <Button Grid.Row="1" Grid.Column="8" Content="🖨️ Imprimir"
+                            ToolTip="Imprime el LPN visible de cada fila seleccionada. Recalcula y corrige la tarima en la BD si el lote se partió."
+                            Command="{Binding ImprimirCommand}" />
+
+                    <CheckBox Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="3" Margin="0,10,0,0"
+                              Content="Impresión por lotes"
+                              IsChecked="{Binding ImprimirPorLotes}"
+                              ToolTip="Si se marca, el consecutivo de tarimas (X de N) se renumera de 1 a la cantidad de filas seleccionadas, en vez de usar la posición y el total de la hoja completa cargada." />
                 </Grid>
             </Border>
 

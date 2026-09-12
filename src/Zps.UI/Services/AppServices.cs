@@ -17,6 +17,7 @@ public sealed class AppServices : IAsyncDisposable
     public required ConsecutivosService? Consecutivos { get; init; }
     public required HistoricoService? Historico { get; init; }
     public required CatalogoClientesService? CatalogoClientes { get; init; }
+    public required PlantillasService? Plantillas { get; init; }
     public required LocalCacheStore CacheLocal { get; init; }
     public required PrinterService Impresoras { get; init; }
     public required LabelaryPreviewService Preview { get; init; }

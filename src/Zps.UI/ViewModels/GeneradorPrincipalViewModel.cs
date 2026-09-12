@@ -47,6 +47,22 @@ public sealed partial class GeneradorPrincipalViewModel : ObservableObject
 
     private readonly AppServices _services;
 
+    /// <summary>
+    /// Plantilla administrada en vivo (plantillas_zpl) resuelta para la hoja actualmente
+    /// seleccionada, si existe y está activa. Cuando es null, se usa el fallback existente
+    /// (ClienteSeleccionado.PlantillaZpl + MapeoColumnas), para no romper compatibilidad con
+    /// clientes que aún no migraron a este mecanismo.
+    /// </summary>
+    private PlantillaZplRecord? _plantillaDinamica;
+
+    /// <summary>
+    /// Folios recién reservados por "Generar" (LPN + tipo/consecutivo por fila) que todavía
+    /// no se insertaron en historico_impresiones: "Guardar" los consume y los limpia. Se
+    /// mantiene aparte del DataTable porque el tipo/consecutivo de ConsecutivosService no
+    /// tiene sentido como columna visible de la grilla.
+    /// </summary>
+    private List<(DataRow Fila, TipoSecuenciaLpn Tipo, int Consecutivo)>? _reservaPendiente;
+
     public ObservableCollection<ClienteCatalogoRecord> Clientes { get; } = new();
 
     public ObservableCollection<string> Impresoras { get; } = new();
@@ -54,8 +70,7 @@ public sealed partial class GeneradorPrincipalViewModel : ObservableObject
     public ObservableCollection<string> Hojas { get; } = new();
 
     [ObservableProperty]
-    [NotifyCanExecuteChangedFor(nameof(GenerarEImprimirCommand))]
-    [NotifyCanExecuteChangedFor(nameof(GenerarSinImprimirCommand))]
+    [NotifyCanExecuteChangedFor(nameof(GenerarOGuardarCommand))]
     [NotifyPropertyChangedFor(nameof(ClienteActivoTexto))]
     private ClienteCatalogoRecord? _clienteSeleccionado;
 
@@ -67,15 +82,15 @@ public sealed partial class GeneradorPrincipalViewModel : ObservableObject
     private bool _requiereSeleccionManualDeCliente;
 
     [ObservableProperty]
-    [NotifyCanExecuteChangedFor(nameof(GenerarEImprimirCommand))]
+    [NotifyCanExecuteChangedFor(nameof(ImprimirCommand))]
     private string? _impresoraSeleccionada;
 
     [ObservableProperty]
     private string? _hojaSeleccionada;
 
     [ObservableProperty]
-    [NotifyCanExecuteChangedFor(nameof(GenerarEImprimirCommand))]
-    [NotifyCanExecuteChangedFor(nameof(GenerarSinImprimirCommand))]
+    [NotifyCanExecuteChangedFor(nameof(GenerarOGuardarCommand))]
+    [NotifyCanExecuteChangedFor(nameof(ImprimirCommand))]
     private DataTable? _datosExcel;
 
     [ObservableProperty]
@@ -93,12 +108,32 @@ public sealed partial class GeneradorPrincipalViewModel : ObservableObject
     [ObservableProperty]
     private string _arribo = string.Empty;
 
+    /// <summary>
+    /// Consecutivo dinámico de tarimas: en false (por defecto), {INDICE}/{TOTAL} reflejan la
+    /// posición absoluta de la fila y el tamaño de la hoja completa cargada; en true, se
+    /// renumeran relativos únicamente a las filas marcadas con el checkbox de selección
+    /// (1..Y), igual que ya hacía MYC de forma fija — aquí queda disponible para cualquier
+    /// cliente que lo necesite.
+    /// </summary>
+    [ObservableProperty]
+    private bool _imprimirPorLotes;
+
+    /// <summary>
+    /// True justo después de "Generar" (LPNs reservados en el grid, aún no guardados en
+    /// Histórico): el botón principal cambia de texto a "Guardar" y de color a naranja.
+    /// Vuelve a false en cuanto "Guardar" inserta los registros (o al cargar una hoja nueva).
+    /// </summary>
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(GenerarOGuardarCommand))]
+    [NotifyPropertyChangedFor(nameof(TextoBotonPrincipal))]
+    private bool _estaListoParaGuardar;
+
     [ObservableProperty]
     private string _estadoMensaje = "Listo. Carga un Excel para comenzar.";
 
     [ObservableProperty]
-    [NotifyCanExecuteChangedFor(nameof(GenerarEImprimirCommand))]
-    [NotifyCanExecuteChangedFor(nameof(GenerarSinImprimirCommand))]
+    [NotifyCanExecuteChangedFor(nameof(GenerarOGuardarCommand))]
+    [NotifyCanExecuteChangedFor(nameof(ImprimirCommand))]
     private bool _estaOcupado;
 
     [ObservableProperty]
@@ -112,6 +147,9 @@ public sealed partial class GeneradorPrincipalViewModel : ObservableObject
     public string ClienteActivoTexto => ClienteSeleccionado is null
         ? "Sin cliente identificado"
         : $"{ClienteSeleccionado.Nombre} ({ClienteSeleccionado.EstrategiaLpn})";
+
+    /// <summary>"Generar" en reposo; "Guardar" (con fondo naranja, ver la vista) mientras hay LPNs generados pendientes de insertar en Histórico.</summary>
+    public string TextoBotonPrincipal => EstaListoParaGuardar ? "Guardar" : "Generar";
 
     public GeneradorPrincipalViewModel(AppServices services)
     {
@@ -214,8 +252,8 @@ public sealed partial class GeneradorPrincipalViewModel : ObservableObject
     {
         if (e.Column?.ColumnName == "_Seleccionado")
         {
-            GenerarEImprimirCommand.NotifyCanExecuteChanged();
-            GenerarSinImprimirCommand.NotifyCanExecuteChanged();
+            GenerarOGuardarCommand.NotifyCanExecuteChanged();
+            ImprimirCommand.NotifyCanExecuteChanged();
         }
     }
 
@@ -319,9 +357,13 @@ public sealed partial class GeneradorPrincipalViewModel : ObservableObject
         EstaOcupado = true;
         try
         {
+            await ResolverPlantillaDinamicaAsync(hoja);
+
             var tabla = await Task.Run(() => LeerHojaComoDataTable(ruta, hoja));
             DatosExcel = tabla;
             VistaDatos = tabla.DefaultView;
+            _reservaPendiente = null;
+            EstaListoParaGuardar = false;
             RevalidarFilas();
             EstadoMensaje = $"{tabla.Rows.Count} fila(s) cargadas de la hoja '{hoja}'.";
 
@@ -376,43 +418,46 @@ public sealed partial class GeneradorPrincipalViewModel : ObservableObject
         }
     }
 
-    private bool PuedeGenerar() =>
-        ClienteSeleccionado is not null &&
-        !string.IsNullOrWhiteSpace(ImpresoraSeleccionada) &&
-        HayFilasSeleccionadas() &&
-        !EstaOcupado;
-
-    /// <summary>
-    /// "Generar sin Imprimir" no requiere ninguna impresora seleccionada: pensado para una
-    /// estación remota sin Zebra conectada, que solo necesita reservar folios, validar y
-    /// dejar los registros listos en historico_impresiones para que otra estación (la que
-    /// sí tiene la impresora física) los busque y reimprima.
-    /// </summary>
-    private bool PuedeGenerarSinImprimir() =>
-        ClienteSeleccionado is not null &&
-        HayFilasSeleccionadas() &&
-        !EstaOcupado;
-
     private bool HayFilasSeleccionadas() =>
         DatosExcel is not null &&
         DatosExcel.Rows.Cast<DataRow>().Any(fila => fila["_Seleccionado"] is bool marcada && marcada);
 
-    [RelayCommand(CanExecute = nameof(PuedeGenerar))]
-    private Task GenerarEImprimirAsync() => EjecutarGeneracionAsync(despacharAImpresora: true);
+    private bool HayFilasSinLpnEnSeleccion() =>
+        DatosExcel is not null &&
+        DatosExcel.Rows.Cast<DataRow>().Any(fila =>
+            fila["_Seleccionado"] is bool marcada && marcada &&
+            string.IsNullOrWhiteSpace(ObtenerValorColumna(fila, "LPN")));
 
-    [RelayCommand(CanExecute = nameof(PuedeGenerarSinImprimir))]
-    private Task GenerarSinImprimirAsync() => EjecutarGeneracionAsync(despacharAImpresora: false);
+    private bool HayLpnVisibleParaImprimir() =>
+        DatosExcel is not null &&
+        DatosExcel.Rows.Cast<DataRow>().Any(fila =>
+            fila["_Seleccionado"] is bool marcada && marcada &&
+            !string.IsNullOrWhiteSpace(ObtenerValorColumna(fila, "LPN")));
 
-    private async Task EjecutarGeneracionAsync(bool despacharAImpresora)
+    /// <summary>
+    /// Habilitado como "Generar" mientras la selección tenga alguna fila sin LPN todavía;
+    /// una vez que "Generar" reservó folios para toda la selección (EstaListoParaGuardar),
+    /// sigue habilitado pero pasa a actuar como "Guardar". Al terminar de guardar (o al venir
+    /// de "Reimprimir Selección", donde todo ya tiene LPN), queda deshabilitado: no hay nada
+    /// más que generar ni guardar para esa selección, y así se evita reservar folios de más.
+    /// </summary>
+    private bool PuedeGenerarOGuardar() =>
+        !EstaOcupado && ClienteSeleccionado is not null && HayFilasSeleccionadas() &&
+        (EstaListoParaGuardar || HayFilasSinLpnEnSeleccion());
+
+    [RelayCommand(CanExecute = nameof(PuedeGenerarOGuardar))]
+    private Task GenerarOGuardarAsync() => EstaListoParaGuardar ? GuardarAsync() : GenerarAsync();
+
+    /// <summary>
+    /// Botón "Generar": solo reserva folios (LPN) para las filas seleccionadas que aún no
+    /// tienen uno y los muestra en el grid. No inserta nada en historico_impresiones todavía
+    /// — eso lo hace "Guardar" — para que un folio reservado nunca quede "a medias" sin que
+    /// el operador decida explícitamente confirmarlo.
+    /// </summary>
+    private async Task GenerarAsync()
     {
         if (DatosExcel is null || ClienteSeleccionado is null)
         {
-            return;
-        }
-
-        if (despacharAImpresora && string.IsNullOrWhiteSpace(ImpresoraSeleccionada))
-        {
-            EstadoMensaje = "Selecciona una impresora, o usa 'Generar sin Imprimir' si esta estación no tiene una Zebra conectada.";
             return;
         }
 
@@ -422,31 +467,29 @@ public sealed partial class GeneradorPrincipalViewModel : ObservableObject
             return;
         }
 
-        if (_services.Consecutivos is null || _services.Historico is null)
+        if (_services.Consecutivos is null)
         {
             EstadoMensaje = "Neon no está disponible: no se pueden reservar folios sin conexión.";
             return;
         }
 
         EstaOcupado = true;
-        Progreso = 0;
         try
         {
             RevalidarFilas();
             var esMiniso = string.Equals(ClienteSeleccionado.EstrategiaLpn, "MINISO", StringComparison.OrdinalIgnoreCase);
-            var esMyc = string.Equals(ClienteSeleccionado.Codigo, "MYC", StringComparison.OrdinalIgnoreCase);
 
-            // Todas las filas de la hoja (para el indexado absoluto de clientes no-MYC) vs.
-            // solo las marcadas con el checkbox (lo único que realmente se genera/imprime).
-            var todasLasFilas = DatosExcel.Rows.Cast<DataRow>().ToList();
-            var indiceAbsolutoPorFila = todasLasFilas
-                .Select((fila, indice) => (fila, indice))
-                .ToDictionary(x => x.fila, x => x.indice + 1);
+            // Solo las filas seleccionadas que TODAVÍA no tienen LPN: si el operador ya
+            // generó una parte de la selección y vuelve a ampliar la selección, "Generar"
+            // no vuelve a pedir folios para las que ya tienen uno.
+            var filas = DatosExcel.Rows.Cast<DataRow>()
+                .Where(fila => fila["_Seleccionado"] is bool marcada && marcada &&
+                                string.IsNullOrWhiteSpace(ObtenerValorColumna(fila, "LPN")))
+                .ToList();
 
-            var filas = todasLasFilas.Where(f => f["_Seleccionado"] is bool marcada && marcada).ToList();
             if (filas.Count == 0)
             {
-                EstadoMensaje = "Selecciona al menos una fila (checkbox) para generar e imprimir.";
+                EstadoMensaje = "No hay filas seleccionadas pendientes de generar LPN.";
                 return;
             }
 
@@ -485,7 +528,6 @@ public sealed partial class GeneradorPrincipalViewModel : ObservableObject
                 }
             }
 
-            var folioPorFila = new Dictionary<DataRow, string>();
             var consecutivoPorFila = new Dictionary<DataRow, int>();
 
             foreach (var grupo in infoPorFila.GroupBy(x => x.Tipo))
@@ -505,14 +547,74 @@ public sealed partial class GeneradorPrincipalViewModel : ObservableObject
                     }
 
                     fila["LPN"] = folio;
-                    folioPorFila[fila] = folio;
+                    fila["_YaGuardado"] = false;
                     consecutivoPorFila[fila] = consecutivo;
                 }
             }
 
-            var registros = infoPorFila.Select(x => new HistoricoImpresionRecord(
-                Lpn: folioPorFila[x.Fila],
-                Consecutivo: consecutivoPorFila[x.Fila],
+            _reservaPendiente = infoPorFila.Select(x => (x.Fila, x.Tipo, consecutivoPorFila[x.Fila])).ToList();
+            EstaListoParaGuardar = true;
+            EstadoMensaje = $"{filas.Count} LPN(s) generado(s). Revisa el grid y presiona 'Guardar' para registrarlos en Histórico.";
+
+            if (filas.Count > 0)
+            {
+                await ActualizarPreviewAsync(filas[0]);
+            }
+        }
+        catch (Exception ex)
+        {
+            EstadoMensaje = $"Error durante la generación: {ex.Message}";
+        }
+        finally
+        {
+            EstaOcupado = false;
+            ImprimirCommand.NotifyCanExecuteChanged();
+        }
+    }
+
+    /// <summary>
+    /// Botón "Guardar": calcula y asigna TarimaActual/TarimaTotal (respetando "Impresión por
+    /// lotes") para los folios que "Generar" acaba de reservar, e inserta los registros en
+    /// historico_impresiones (Neon y caché local). Es el único punto del flujo que inserta.
+    /// </summary>
+    private async Task GuardarAsync()
+    {
+        if (DatosExcel is null || ClienteSeleccionado is null)
+        {
+            return;
+        }
+
+        if (_reservaPendiente is null || _reservaPendiente.Count == 0)
+        {
+            EstadoMensaje = "No hay LPNs generados pendientes de guardar.";
+            EstaListoParaGuardar = false;
+            return;
+        }
+
+        if (_services.Historico is null)
+        {
+            EstadoMensaje = "Neon no está disponible: no se puede guardar en Histórico sin conexión.";
+            return;
+        }
+
+        EstaOcupado = true;
+        try
+        {
+            var todasLasFilas = DatosExcel.Rows.Cast<DataRow>().ToList();
+            var indiceAbsolutoPorFila = todasLasFilas
+                .Select((fila, indice) => (fila, indice))
+                .ToDictionary(x => x.fila, x => x.indice + 1);
+
+            var filas = _reservaPendiente.Select(x => x.Fila).ToList();
+            var esMyc = string.Equals(ClienteSeleccionado.Codigo, "MYC", StringComparison.OrdinalIgnoreCase);
+            var total = filas.Count;
+            var totalHojaCompleta = todasLasFilas.Count;
+            var usarIndexadoPorLotes = esMyc || ImprimirPorLotes;
+            var tarimaPorFila = CalcularTarimaPorFila(filas, indiceAbsolutoPorFila, total, totalHojaCompleta, usarIndexadoPorLotes);
+
+            var registros = _reservaPendiente.Select(x => new HistoricoImpresionRecord(
+                Lpn: ObtenerValorColumna(x.Fila, "LPN"),
+                Consecutivo: x.Consecutivo,
                 Tipo: x.Tipo.ToString(),
                 Cliente: ClienteSeleccionado.Codigo,
                 Solicitante: Solicitante.Trim(),
@@ -526,89 +628,153 @@ public sealed partial class GeneradorPrincipalViewModel : ObservableObject
                 // CAJAS es texto (no numérico): algunos clientes (p. ej. AXO) capturan
                 // valores no numéricos como "NV" junto con cantidades reales.
                 Cajas: NuloSiVacio(ObtenerValorColumna(x.Fila, "CAJAS")),
+                TarimaActual: tarimaPorFila[x.Fila].Indice,
+                TarimaTotal: tarimaPorFila[x.Fila].Total,
                 VariablesJson: JsonSerializer.Serialize(FilaADiccionario(x.Fila))))
                 .ToList();
 
             await _services.Historico.InsertarLoteAsync(registros);
             await _services.CacheLocal.ReplicarHistoricoAsync(registros);
 
+            foreach (var x in _reservaPendiente)
+            {
+                x.Fila["_YaGuardado"] = true;
+                x.Fila["_TarimaActual"] = tarimaPorFila[x.Fila].Indice;
+                x.Fila["_TarimaTotal"] = tarimaPorFila[x.Fila].Total;
+                x.Fila["_Consecutivo"] = x.Consecutivo;
+            }
+
+            EstadoMensaje = $"{total} etiqueta(s) guardadas en Histórico. Usa 'Imprimir' para enviarlas a la impresora.";
+            _reservaPendiente = null;
+            EstaListoParaGuardar = false;
+            VistaDatos = DatosExcel.DefaultView;
+        }
+        catch (Exception ex)
+        {
+            EstadoMensaje = $"Error guardando en Histórico: {ex.Message}";
+        }
+        finally
+        {
+            EstaOcupado = false;
+            ImprimirCommand.NotifyCanExecuteChanged();
+        }
+    }
+
+    private bool PuedeImprimir() =>
+        !EstaOcupado && !string.IsNullOrWhiteSpace(ImpresoraSeleccionada) && HayLpnVisibleParaImprimir();
+
+    /// <summary>
+    /// Botón "Imprimir": ya no reserva folios nuevos — imprime el LPN visible de cada fila
+    /// seleccionada (las que no tienen LPN se omiten). Antes de imprimir, recalcula
+    /// TarimaActual/TarimaTotal según la selección vigente y "Impresión por lotes" (el
+    /// operador pudo haber partido el lote respecto a lo guardado originalmente); si la fila
+    /// ya existía en historico_impresiones (guardada antes, o cargada desde "Reimprimir
+    /// Selección") y el recalculo dio un valor distinto al ya grabado, corrige
+    /// tarima_actual/tarima_total en Neon y en la caché local antes de imprimir, para que la
+    /// base de datos refleje exactamente cómo salió la etiqueta física.
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(PuedeImprimir))]
+    private async Task ImprimirAsync()
+    {
+        if (DatosExcel is null)
+        {
+            return;
+        }
+
+        EstaOcupado = true;
+        Progreso = 0;
+        try
+        {
+            var todasLasFilas = DatosExcel.Rows.Cast<DataRow>().ToList();
+            var indiceAbsolutoPorFila = todasLasFilas
+                .Select((fila, indice) => (fila, indice))
+                .ToDictionary(x => x.fila, x => x.indice + 1);
+
+            var filas = todasLasFilas
+                .Where(fila => fila["_Seleccionado"] is bool marcada && marcada &&
+                               !string.IsNullOrWhiteSpace(ObtenerValorColumna(fila, "LPN")))
+                .ToList();
+
+            if (filas.Count == 0)
+            {
+                EstadoMensaje = "No hay LPNs visibles para imprimir: genera folios primero o revisa la selección.";
+                return;
+            }
+
+            var esMyc = string.Equals(ClienteSeleccionado?.Codigo, "MYC", StringComparison.OrdinalIgnoreCase);
             var total = filas.Count;
             var totalHojaCompleta = todasLasFilas.Count;
+            var usarIndexadoPorLotes = esMyc || ImprimirPorLotes;
+            var tarimaPorFila = CalcularTarimaPorFila(filas, indiceAbsolutoPorFila, total, totalHojaCompleta, usarIndexadoPorLotes);
+
             var errores = 0;
-            var esImpresoraVirtual = despacharAImpresora && string.Equals(ImpresoraSeleccionada, ImpresoraVirtualNombre, StringComparison.Ordinal);
+            var tarimasCorregidas = 0;
+            var esImpresoraVirtual = string.Equals(ImpresoraSeleccionada, ImpresoraVirtualNombre, StringComparison.Ordinal);
             var auditoriaVirtual = esImpresoraVirtual ? new List<AuditoriaEtiqueta>(total) : null;
 
-            for (var i = 0; i < infoPorFila.Count; i++)
+            for (var i = 0; i < filas.Count; i++)
             {
-                var fila = infoPorFila[i].Fila;
+                var fila = filas[i];
+                var (indiceNuevo, totalNuevo) = tarimaPorFila[fila];
+                var lpn = ObtenerValorColumna(fila, "LPN");
 
-                // "Generar sin Imprimir": el folio ya quedó reservado y guardado en
-                // historico_impresiones arriba; no hace falta generar ZPL ni tocar ninguna
-                // impresora (real o virtual) — otra estación con la Zebra conectada lo
-                // reimprimirá después desde la pestaña Histórico.
-                if (despacharAImpresora)
+                // REGLA CRÍTICA: corrige tarima_actual/tarima_total en la BD si esta fila ya
+                // estaba guardada y el recalculo (por selección o "Impresión por lotes") dio
+                // un valor distinto al ya grabado.
+                var yaGuardado = fila["_YaGuardado"] is bool yg && yg;
+                if (yaGuardado)
                 {
-                    // Indexado especial de bultos: MYC renumera relativo al lote que se
-                    // imprime ahora mismo (1..N seleccionadas); el resto de clientes usa la
-                    // posición absoluta de la fila y el tamaño de la hoja completa (aunque
-                    // se imprima solo un subconjunto), igual que run_print/confirmar_print
-                    // en app_centralizada.py.
-                    int indiceParaZpl;
-                    int totalParaZpl;
-                    if (esMyc)
+                    var actualPrevio = fila["_TarimaActual"] as int?;
+                    var totalPrevio = fila["_TarimaTotal"] as int?;
+                    if (actualPrevio != indiceNuevo || totalPrevio != totalNuevo)
                     {
-                        indiceParaZpl = i + 1;
-                        totalParaZpl = total;
-                    }
-                    else
-                    {
-                        indiceParaZpl = indiceAbsolutoPorFila[fila];
-                        totalParaZpl = totalHojaCompleta;
-                    }
-
-                    var datos = FilaADiccionario(fila);
-                    var zpl = ZplTemplateEngine.Generar(
-                        ClienteSeleccionado.PlantillaZpl ?? string.Empty,
-                        ClienteSeleccionado.MapeoColumnas,
-                        datos,
-                        indiceParaZpl,
-                        totalParaZpl);
-
-                    if (esImpresoraVirtual)
-                    {
-                        // Modo auditoría: nunca toca el spooler real; renderiza vía Labelary
-                        // para revisión visual, con la reserva de folios y el guardado en
-                        // histórico ya hechos exactamente igual que en una impresión real.
-                        var resultadoPreview = await _services.Preview.GenerarVistaPreviaAsync(zpl);
-                        auditoriaVirtual!.Add(new AuditoriaEtiqueta(
-                            folioPorFila[fila],
-                            resultadoPreview.Exito ? resultadoPreview.ImagenPng : null,
-                            resultadoPreview.Exito ? null : resultadoPreview.Error));
-                    }
-                    else
-                    {
-                        var resultado = await _services.Impresoras.EncolarAsync(ImpresoraSeleccionada!, zpl, $"LPN {folioPorFila[fila]}");
-                        if (!resultado.Exito)
+                        if (_services.Historico is not null)
                         {
-                            errores++;
+                            try
+                            {
+                                await _services.Historico.ActualizarTarimaAsync(lpn, indiceNuevo, totalNuevo);
+                            }
+                            catch (Exception ex)
+                            {
+                                EstadoMensaje = $"No se pudo corregir la tarima en Neon para '{lpn}': {ex.Message}";
+                            }
                         }
+
+                        await _services.CacheLocal.ActualizarTarimaAsync(lpn, indiceNuevo, totalNuevo);
+                        fila["_TarimaActual"] = indiceNuevo;
+                        fila["_TarimaTotal"] = totalNuevo;
+                        tarimasCorregidas++;
+                    }
+                }
+
+                var consecutivo = fila["_Consecutivo"] as int?;
+                var zpl = GenerarZplParaFila(fila, consecutivo, indiceNuevo, totalNuevo);
+
+                if (esImpresoraVirtual)
+                {
+                    // Modo auditoría: nunca toca el spooler real; renderiza vía Labelary
+                    // para revisión visual.
+                    var resultadoPreview = await _services.Preview.GenerarVistaPreviaAsync(zpl);
+                    auditoriaVirtual!.Add(new AuditoriaEtiqueta(
+                        lpn,
+                        resultadoPreview.Exito ? resultadoPreview.ImagenPng : null,
+                        resultadoPreview.Exito ? null : resultadoPreview.Error));
+                }
+                else
+                {
+                    var resultado = await _services.Impresoras.EncolarAsync(ImpresoraSeleccionada!, zpl, $"LPN {lpn}");
+                    if (!resultado.Exito)
+                    {
+                        errores++;
                     }
                 }
 
                 Progreso = (i + 1) / (double)total;
             }
 
-            EstadoMensaje = !despacharAImpresora
-                ? $"Proceso terminado: {total} etiqueta(s) generadas y guardadas en histórico (sin imprimir). Ya están disponibles para buscarlas y reimprimirlas desde la pestaña Histórico."
-                : esImpresoraVirtual
-                    ? $"Proceso terminado (modo virtual): {total} etiqueta(s) generadas y guardadas en histórico, ninguna enviada a una impresora real."
-                    : $"Proceso terminado: {total} etiqueta(s), {errores} error(es).";
-            VistaDatos = DatosExcel.DefaultView;
-
-            if (filas.Count > 0)
-            {
-                await ActualizarPreviewAsync(filas[0]);
-            }
+            EstadoMensaje = esImpresoraVirtual
+                ? $"Impresión (modo virtual) terminada: {total} etiqueta(s), {tarimasCorregidas} tarima(s) corregida(s) en la BD."
+                : $"Impresión terminada: {total} etiqueta(s), {errores} error(es), {tarimasCorregidas} tarima(s) corregida(s) en la BD.";
 
             if (auditoriaVirtual is not null)
             {
@@ -623,7 +789,7 @@ public sealed partial class GeneradorPrincipalViewModel : ObservableObject
         }
         catch (Exception ex)
         {
-            EstadoMensaje = $"Error durante la generación: {ex.Message}";
+            EstadoMensaje = $"Error durante la impresión: {ex.Message}";
         }
         finally
         {
@@ -631,22 +797,250 @@ public sealed partial class GeneradorPrincipalViewModel : ObservableObject
         }
     }
 
+    private static Dictionary<DataRow, (int Indice, int Total)> CalcularTarimaPorFila(
+        IReadOnlyList<DataRow> filas,
+        IReadOnlyDictionary<DataRow, int> indiceAbsolutoPorFila,
+        int total,
+        int totalHojaCompleta,
+        bool usarIndexadoPorLotes)
+    {
+        var resultado = new Dictionary<DataRow, (int, int)>();
+        for (var i = 0; i < filas.Count; i++)
+        {
+            resultado[filas[i]] = usarIndexadoPorLotes
+                ? (i + 1, total)
+                : (indiceAbsolutoPorFila[filas[i]], totalHojaCompleta);
+        }
+
+        return resultado;
+    }
+
+    /// <summary>
+    /// Carga en el grid registros ya existentes en historico_impresiones (viene de
+    /// "Reimprimir Selección" en la pestaña Histórico), con su LPN, TarimaActual/TarimaTotal
+    /// e Id ya asignados, para que el operador los reimprima tal cual con "Imprimir", o los
+    /// reparta de otra forma con la selección / "Impresión por lotes" (disparando la regla
+    /// crítica de recálculo y UPDATE de tarima al imprimir).
+    /// </summary>
+    public async Task CargarRegistrosDesdeHistoricoAsync(IReadOnlyList<HistoricoImpresionRecord> registros)
+    {
+        if (registros.Count == 0)
+        {
+            return;
+        }
+
+        EstaOcupado = true;
+        try
+        {
+            RutaArchivo = null;
+            OnPropertyChanged(nameof(NombreArchivo));
+            Hojas.Clear();
+            HojaSeleccionada = null;
+
+            var clienteCodigo = registros[0].Cliente;
+            var cliente = clienteCodigo is null
+                ? null
+                : Clientes.FirstOrDefault(c => string.Equals(c.Codigo, clienteCodigo, StringComparison.OrdinalIgnoreCase));
+
+            ClienteSeleccionado = cliente;
+            RequiereSeleccionManualDeCliente = cliente is null;
+
+            _plantillaDinamica = null;
+            if (clienteCodigo is not null)
+            {
+                // plantillas_zpl se siembra con hoja_excel = código de cliente, así que el
+                // propio código sirve como "hoja" para resolver la plantilla dinámica aquí,
+                // donde no hay una hoja de Excel real de por medio.
+                await ResolverPlantillaDinamicaAsync(clienteCodigo);
+            }
+
+            var tabla = ConstruirTablaDesdeHistorico(registros);
+            DatosExcel = tabla;
+            VistaDatos = tabla.DefaultView;
+
+            Arribo = registros[0].Arribo;
+            Solicitante = registros[0].Solicitante;
+
+            _reservaPendiente = null;
+            EstaListoParaGuardar = false;
+
+            EstadoMensaje = $"{registros.Count} registro(s) cargados desde Histórico. Usa 'Imprimir' para reimprimirlos tal cual, " +
+                "o ajusta la selección / 'Impresión por lotes' para partir el lote (se corrige la tarima en la base de datos).";
+
+            if (tabla.Rows.Count > 0)
+            {
+                await ActualizarPreviewAsync(tabla.Rows[0]);
+            }
+            else
+            {
+                ImagenPreview = null;
+            }
+        }
+        finally
+        {
+            EstaOcupado = false;
+            GenerarOGuardarCommand.NotifyCanExecuteChanged();
+            ImprimirCommand.NotifyCanExecuteChanged();
+        }
+    }
+
+    /// <summary>
+    /// Reconstruye un DataTable "tipo Excel" a partir de registros de historico_impresiones:
+    /// une las columnas de VariablesJson de todos los registros (insensible a mayúsculas), y
+    /// agrega las columnas ocultas de control, ya marcadas como guardadas (_YaGuardado=true)
+    /// con su TarimaActual/TarimaTotal/Consecutivo originales.
+    /// </summary>
+    private static DataTable ConstruirTablaDesdeHistorico(IReadOnlyList<HistoricoImpresionRecord> registros)
+    {
+        var nombresColumnas = new List<string>();
+        var filasDatos = new List<Dictionary<string, string?>>();
+
+        foreach (var registro in registros)
+        {
+            var deserializado = string.IsNullOrEmpty(registro.VariablesJson)
+                ? null
+                : JsonSerializer.Deserialize<Dictionary<string, string?>>(registro.VariablesJson);
+            var datos = new Dictionary<string, string?>(deserializado ?? new Dictionary<string, string?>(), StringComparer.OrdinalIgnoreCase);
+
+            datos["LPN"] = registro.Lpn;
+            if (registro.Sku is not null)
+            {
+                datos.TryAdd("SKU", registro.Sku);
+            }
+
+            if (registro.Lote is not null)
+            {
+                datos.TryAdd("LOTE", registro.Lote);
+            }
+
+            if (registro.Cantidad.HasValue)
+            {
+                datos.TryAdd("CANTIDAD", registro.Cantidad.Value.ToString(CultureInfo.InvariantCulture));
+            }
+
+            if (registro.Cajas is not null)
+            {
+                datos.TryAdd("CAJAS", registro.Cajas);
+            }
+
+            filasDatos.Add(datos);
+            foreach (var columna in datos.Keys)
+            {
+                if (!nombresColumnas.Contains(columna, StringComparer.OrdinalIgnoreCase))
+                {
+                    nombresColumnas.Add(columna);
+                }
+            }
+        }
+
+        var tabla = new DataTable();
+        foreach (var nombre in nombresColumnas)
+        {
+            tabla.Columns.Add(nombre, typeof(string));
+        }
+
+        tabla.Columns.Add("_EsValido", typeof(bool));
+        tabla.Columns.Add("_MensajeError", typeof(string));
+        tabla.Columns.Add("_Seleccionado", typeof(bool));
+        tabla.Columns.Add("_YaGuardado", typeof(bool));
+        tabla.Columns.Add("_TarimaActual", typeof(int));
+        tabla.Columns.Add("_TarimaTotal", typeof(int));
+        tabla.Columns.Add("_Consecutivo", typeof(int));
+
+        for (var i = 0; i < registros.Count; i++)
+        {
+            var nuevaFila = tabla.NewRow();
+            foreach (var nombre in nombresColumnas)
+            {
+                nuevaFila[nombre] = filasDatos[i].TryGetValue(nombre, out var valor) ? (object?)valor ?? DBNull.Value : DBNull.Value;
+            }
+
+            nuevaFila["_EsValido"] = true;
+            nuevaFila["_MensajeError"] = string.Empty;
+            nuevaFila["_Seleccionado"] = true;
+            nuevaFila["_YaGuardado"] = true;
+            nuevaFila["_TarimaActual"] = registros[i].TarimaActual ?? 1;
+            nuevaFila["_TarimaTotal"] = registros[i].TarimaTotal ?? registros.Count;
+            if (registros[i].Consecutivo.HasValue)
+            {
+                nuevaFila["_Consecutivo"] = registros[i].Consecutivo!.Value;
+            }
+
+            tabla.Rows.Add(nuevaFila);
+        }
+
+        return tabla;
+    }
+
     private async Task ActualizarPreviewAsync(DataRow fila)
     {
-        if (ClienteSeleccionado?.PlantillaZpl is null)
+        if (_plantillaDinamica is null && ClienteSeleccionado?.PlantillaZpl is null)
         {
             ImagenPreview = null;
             return;
         }
 
-        var datos = FilaADiccionario(fila);
-        var zpl = ZplTemplateEngine.Generar(ClienteSeleccionado.PlantillaZpl, ClienteSeleccionado.MapeoColumnas, datos, 1, 1);
+        // Vista previa: el consecutivo real del folio (LPN) todavía no existe (se reserva
+        // recién al generar), así que {{CONSECUTIVO}} queda en blanco hasta ese momento.
+        var zpl = GenerarZplParaFila(fila, consecutivo: null, indiceActual: 1, totalFilas: 1);
         var resultado = await _services.Preview.GenerarVistaPreviaAsync(zpl);
 
         ImagenPreview = resultado.Exito ? resultado.ImagenPng : null;
         if (!resultado.Exito)
         {
             EstadoMensaje = $"Vista previa no disponible: {resultado.Error}";
+        }
+    }
+
+    /// <summary>
+    /// Resuelve el ZPL de una fila: si hay una plantilla administrada en vivo
+    /// (plantillas_zpl) activa para la hoja seleccionada, la usa (placeholders "{{TAG}}");
+    /// si no, cae al mecanismo existente de cat_clientes (placeholders "{PLACEHOLDER}" +
+    /// mapeo_columnas), para no romper compatibilidad con clientes aún no migrados.
+    /// </summary>
+    private string GenerarZplParaFila(DataRow fila, int? consecutivo, int indiceActual, int totalFilas)
+    {
+        var datos = FilaADiccionario(fila);
+
+        if (_plantillaDinamica is not null)
+        {
+            var lpn = ObtenerValorColumna(fila, "LPN");
+            return ZplPlantillaDinamicaEngine.Generar(
+                _plantillaDinamica.CodigoZpl,
+                datos,
+                lpn: string.IsNullOrEmpty(lpn) ? null : lpn,
+                consecutivo: consecutivo,
+                tarimaActual: indiceActual,
+                tarimaTotal: totalFilas,
+                arribo: Arribo,
+                solicitante: Solicitante);
+        }
+
+        return ZplTemplateEngine.Generar(
+            ClienteSeleccionado?.PlantillaZpl ?? string.Empty,
+            ClienteSeleccionado?.MapeoColumnas ?? new Dictionary<string, string>(),
+            datos,
+            indiceActual,
+            totalFilas);
+    }
+
+    /// <summary>
+    /// Busca en plantillas_zpl (Neon, con fallback a la caché local si no hay conexión) una
+    /// plantilla activa enlazada al nombre exacto de la hoja seleccionada. Si no existe
+    /// ninguna, _plantillaDinamica queda en null y el resto del flujo usa el mecanismo
+    /// existente sin ningún cambio de comportamiento.
+    /// </summary>
+    private async Task ResolverPlantillaDinamicaAsync(string hoja)
+    {
+        try
+        {
+            _plantillaDinamica = _services.Plantillas is not null
+                ? await _services.Plantillas.ObtenerPorHojaAsync(hoja)
+                : await _services.CacheLocal.ObtenerPlantillaPorHojaAsync(hoja);
+        }
+        catch
+        {
+            _plantillaDinamica = await _services.CacheLocal.ObtenerPlantillaPorHojaAsync(hoja);
         }
     }
 
@@ -741,6 +1135,10 @@ public sealed partial class GeneradorPrincipalViewModel : ObservableObject
         tabla.Columns.Add("_EsValido", typeof(bool));
         tabla.Columns.Add("_MensajeError", typeof(string));
         tabla.Columns.Add("_Seleccionado", typeof(bool));
+        tabla.Columns.Add("_YaGuardado", typeof(bool));
+        tabla.Columns.Add("_TarimaActual", typeof(int));
+        tabla.Columns.Add("_TarimaTotal", typeof(int));
+        tabla.Columns.Add("_Consecutivo", typeof(int));
 
         foreach (var filaXl in filas.Skip(1))
         {
@@ -753,6 +1151,7 @@ public sealed partial class GeneradorPrincipalViewModel : ObservableObject
             nuevaFila["_EsValido"] = true;
             nuevaFila["_MensajeError"] = string.Empty;
             nuevaFila["_Seleccionado"] = true; // por defecto todas las filas arrancan marcadas, como en el original
+            nuevaFila["_YaGuardado"] = false; // aún no existe en historico_impresiones
             tabla.Rows.Add(nuevaFila);
         }
 

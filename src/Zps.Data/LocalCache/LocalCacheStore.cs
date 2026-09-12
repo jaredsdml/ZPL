@@ -68,6 +68,8 @@ public sealed class LocalCacheStore
                 lote            TEXT,
                 cantidad        TEXT,
                 cajas           TEXT,
+                tarima_actual   INTEGER,
+                tarima_total    INTEGER,
                 variables_json  TEXT
             );
             """, cancellationToken);
@@ -78,12 +80,36 @@ public sealed class LocalCacheStore
         // esquema explícitamente para no romper instalaciones ya en uso.
         await MigrarEsquemaHistoricoAsync(connection, cancellationToken);
 
+        await EjecutarAsync(connection, null, """
+            CREATE TABLE IF NOT EXISTS historico_cambios_log (
+                id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                historico_id        INTEGER,
+                lpn                 TEXT,
+                campo_modificado    TEXT,
+                valor_anterior      TEXT,
+                valor_nuevo         TEXT,
+                usuario             TEXT,
+                fecha_cambio        TEXT NOT NULL
+            );
+            """, cancellationToken);
+
         await EjecutarAsync(connection, null,
             "CREATE INDEX IF NOT EXISTS idx_local_historico_cliente ON historico_impresiones (cliente);",
             cancellationToken);
         await EjecutarAsync(connection, null,
             "CREATE INDEX IF NOT EXISTS idx_local_historico_arribo ON historico_impresiones (arribo);",
             cancellationToken);
+
+        await EjecutarAsync(connection, null, """
+            CREATE TABLE IF NOT EXISTS plantillas_zpl (
+                id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                hoja_excel          TEXT NOT NULL UNIQUE,
+                nombre_cliente      TEXT NOT NULL,
+                codigo_zpl          TEXT NOT NULL,
+                activo              INTEGER NOT NULL DEFAULT 1,
+                fecha_modificacion  TEXT NOT NULL
+            );
+            """, cancellationToken);
     }
 
     /// <summary>Replica (upsert) el catálogo de clientes leído de Neon hacia la caché local.</summary>
@@ -133,8 +159,8 @@ public sealed class LocalCacheStore
             await using var cmd = connection.CreateCommand();
             cmd.Transaction = transaction;
             cmd.CommandText = """
-                INSERT INTO historico_impresiones (lpn, consecutivo, tipo, cliente, solicitante, arribo, fecha_hora, sku, lote, cantidad, cajas, variables_json)
-                VALUES ($lpn, $consecutivo, $tipo, $cliente, $solicitante, $arribo, $fecha_hora, $sku, $lote, $cantidad, $cajas, $variables_json)
+                INSERT INTO historico_impresiones (lpn, consecutivo, tipo, cliente, solicitante, arribo, fecha_hora, sku, lote, cantidad, cajas, tarima_actual, tarima_total, variables_json)
+                VALUES ($lpn, $consecutivo, $tipo, $cliente, $solicitante, $arribo, $fecha_hora, $sku, $lote, $cantidad, $cajas, $tarima_actual, $tarima_total, $variables_json)
                 ON CONFLICT (lpn) DO UPDATE SET
                     consecutivo = excluded.consecutivo,
                     tipo = excluded.tipo,
@@ -146,6 +172,8 @@ public sealed class LocalCacheStore
                     lote = excluded.lote,
                     cantidad = excluded.cantidad,
                     cajas = excluded.cajas,
+                    tarima_actual = excluded.tarima_actual,
+                    tarima_total = excluded.tarima_total,
                     variables_json = excluded.variables_json;
                 """;
             cmd.Parameters.AddWithValue("$lpn", r.Lpn);
@@ -159,6 +187,8 @@ public sealed class LocalCacheStore
             cmd.Parameters.AddWithValue("$lote", (object?)r.Lote ?? DBNull.Value);
             cmd.Parameters.AddWithValue("$cantidad", r.Cantidad.HasValue ? r.Cantidad.Value.ToString(CultureInfo.InvariantCulture) : (object)DBNull.Value);
             cmd.Parameters.AddWithValue("$cajas", (object?)r.Cajas ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$tarima_actual", (object?)r.TarimaActual ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$tarima_total", (object?)r.TarimaTotal ?? DBNull.Value);
             cmd.Parameters.AddWithValue("$variables_json", (object?)r.VariablesJson ?? DBNull.Value);
             await cmd.ExecuteNonQueryAsync(cancellationToken);
         }
@@ -183,6 +213,171 @@ public sealed class LocalCacheStore
 
         await transaction.CommitAsync(cancellationToken);
     }
+
+    /// <summary>
+    /// Espejo local de HistoricoService.ActualizarConAuditoriaAsync: aplica la edición de
+    /// Sku/Lote/Cantidad/Cajas y registra cada cambio en historico_cambios_log de la caché
+    /// local, para que la auditoría sobreviva aunque Neon no esté disponible en ese momento.
+    /// </summary>
+    public async Task ActualizarConAuditoriaAsync(
+        HistoricoImpresionRecord actualizado,
+        IReadOnlyList<CambioCampo> cambios,
+        string usuario,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await AbrirConexionAsync(cancellationToken);
+        await using var transaction = connection.BeginTransaction();
+
+        await using (var cmdUpdate = connection.CreateCommand())
+        {
+            cmdUpdate.Transaction = transaction;
+            cmdUpdate.CommandText = """
+                UPDATE historico_impresiones
+                SET sku = $sku, lote = $lote, cantidad = $cantidad, cajas = $cajas
+                WHERE lpn = $lpn;
+                """;
+            cmdUpdate.Parameters.AddWithValue("$sku", (object?)actualizado.Sku ?? DBNull.Value);
+            cmdUpdate.Parameters.AddWithValue("$lote", (object?)actualizado.Lote ?? DBNull.Value);
+            cmdUpdate.Parameters.AddWithValue("$cantidad", actualizado.Cantidad.HasValue ? actualizado.Cantidad.Value.ToString(CultureInfo.InvariantCulture) : (object)DBNull.Value);
+            cmdUpdate.Parameters.AddWithValue("$cajas", (object?)actualizado.Cajas ?? DBNull.Value);
+            cmdUpdate.Parameters.AddWithValue("$lpn", actualizado.Lpn);
+            await cmdUpdate.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        long? historicoId;
+        await using (var cmdId = connection.CreateCommand())
+        {
+            cmdId.Transaction = transaction;
+            cmdId.CommandText = "SELECT id FROM historico_impresiones WHERE lpn = $lpn;";
+            cmdId.Parameters.AddWithValue("$lpn", actualizado.Lpn);
+            var resultado = await cmdId.ExecuteScalarAsync(cancellationToken);
+            historicoId = resultado is null or DBNull ? null : Convert.ToInt64(resultado);
+        }
+
+        foreach (var cambio in cambios)
+        {
+            await using var cmdLog = connection.CreateCommand();
+            cmdLog.Transaction = transaction;
+            cmdLog.CommandText = """
+                INSERT INTO historico_cambios_log (historico_id, lpn, campo_modificado, valor_anterior, valor_nuevo, usuario, fecha_cambio)
+                VALUES ($historico_id, $lpn, $campo, $anterior, $nuevo, $usuario, $fecha);
+                """;
+            cmdLog.Parameters.AddWithValue("$historico_id", (object?)historicoId ?? DBNull.Value);
+            cmdLog.Parameters.AddWithValue("$lpn", actualizado.Lpn);
+            cmdLog.Parameters.AddWithValue("$campo", cambio.Campo);
+            cmdLog.Parameters.AddWithValue("$anterior", (object?)cambio.ValorAnterior ?? DBNull.Value);
+            cmdLog.Parameters.AddWithValue("$nuevo", (object?)cambio.ValorNuevo ?? DBNull.Value);
+            cmdLog.Parameters.AddWithValue("$usuario", usuario);
+            cmdLog.Parameters.AddWithValue("$fecha", DateTimeOffset.UtcNow.ToString("O"));
+            await cmdLog.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Espejo local de HistoricoService.ActualizarTarimaAsync: corrige tarima_actual/
+    /// tarima_total de un folio ya guardado, sin auditoría, para la regla crítica del botón
+    /// "Imprimir" del Generador Principal.
+    /// </summary>
+    public async Task ActualizarTarimaAsync(
+        string lpn, int tarimaActual, int tarimaTotal, CancellationToken cancellationToken = default)
+    {
+        await using var connection = await AbrirConexionAsync(cancellationToken);
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = """
+            UPDATE historico_impresiones
+            SET tarima_actual = $tarima_actual, tarima_total = $tarima_total
+            WHERE lpn = $lpn;
+            """;
+        cmd.Parameters.AddWithValue("$tarima_actual", tarimaActual);
+        cmd.Parameters.AddWithValue("$tarima_total", tarimaTotal);
+        cmd.Parameters.AddWithValue("$lpn", lpn);
+        await cmd.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    /// <summary>Replica (upsert) las plantillas ZPL administradas, leídas de Neon, hacia la caché local.</summary>
+    public async Task ReplicarPlantillasAsync(IEnumerable<PlantillaZplRecord> plantillas, CancellationToken cancellationToken = default)
+    {
+        await using var connection = await AbrirConexionAsync(cancellationToken);
+        await using var transaction = connection.BeginTransaction();
+
+        foreach (var p in plantillas)
+        {
+            await using var cmd = connection.CreateCommand();
+            cmd.Transaction = transaction;
+            cmd.CommandText = """
+                INSERT INTO plantillas_zpl (hoja_excel, nombre_cliente, codigo_zpl, activo, fecha_modificacion)
+                VALUES ($hoja, $nombre, $codigo, $activo, $fecha)
+                ON CONFLICT (hoja_excel) DO UPDATE SET
+                    nombre_cliente = excluded.nombre_cliente,
+                    codigo_zpl = excluded.codigo_zpl,
+                    activo = excluded.activo,
+                    fecha_modificacion = excluded.fecha_modificacion;
+                """;
+            cmd.Parameters.AddWithValue("$hoja", p.HojaExcel);
+            cmd.Parameters.AddWithValue("$nombre", p.NombreCliente);
+            cmd.Parameters.AddWithValue("$codigo", p.CodigoZpl);
+            cmd.Parameters.AddWithValue("$activo", p.Activo ? 1 : 0);
+            cmd.Parameters.AddWithValue("$fecha", p.FechaModificacion.ToString("O"));
+            await cmd.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<PlantillaZplRecord>> ObtenerPlantillasAsync(CancellationToken cancellationToken = default)
+    {
+        await using var connection = await AbrirConexionAsync(cancellationToken);
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = """
+            SELECT id, hoja_excel, nombre_cliente, codigo_zpl, activo, fecha_modificacion
+            FROM plantillas_zpl
+            ORDER BY hoja_excel;
+            """;
+
+        var resultado = new List<PlantillaZplRecord>();
+        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            resultado.Add(LeerPlantilla(reader));
+        }
+
+        return resultado;
+    }
+
+    /// <summary>
+    /// Equivalente local (sin Neon) de PlantillasService.ObtenerPorHojaAsync, para que el
+    /// Generador Principal pueda resolver la plantilla dinámica de la hoja seleccionada
+    /// aunque la estación esté sin conexión.
+    /// </summary>
+    public async Task<PlantillaZplRecord?> ObtenerPlantillaPorHojaAsync(string hojaExcel, CancellationToken cancellationToken = default)
+    {
+        await using var connection = await AbrirConexionAsync(cancellationToken);
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = "SELECT id, hoja_excel, nombre_cliente, codigo_zpl, activo, fecha_modificacion FROM plantillas_zpl WHERE hoja_excel = $hoja COLLATE NOCASE AND activo = 1;";
+        cmd.Parameters.AddWithValue("$hoja", hojaExcel);
+
+        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+        return await reader.ReadAsync(cancellationToken) ? LeerPlantilla(reader) : null;
+    }
+
+    public async Task EliminarPlantillaAsync(string hojaExcel, CancellationToken cancellationToken = default)
+    {
+        await using var connection = await AbrirConexionAsync(cancellationToken);
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = "DELETE FROM plantillas_zpl WHERE hoja_excel = $hoja COLLATE NOCASE;";
+        cmd.Parameters.AddWithValue("$hoja", hojaExcel);
+        await cmd.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static PlantillaZplRecord LeerPlantilla(SqliteDataReader reader) => new(
+        Id: reader.GetInt32(0),
+        HojaExcel: reader.GetString(1),
+        NombreCliente: reader.GetString(2),
+        CodigoZpl: reader.GetString(3),
+        Activo: reader.GetInt64(4) != 0,
+        FechaModificacion: DateTimeOffset.Parse(reader.GetString(5)));
 
     public async Task<IReadOnlyList<ClienteCatalogoRecord>> ObtenerClientesAsync(CancellationToken cancellationToken = default)
     {
@@ -220,7 +415,7 @@ public sealed class LocalCacheStore
         await using var connection = await AbrirConexionAsync(cancellationToken);
         await using var cmd = connection.CreateCommand();
         cmd.CommandText = """
-            SELECT lpn, consecutivo, tipo, cliente, solicitante, arribo, fecha_hora, sku, lote, cantidad, cajas, variables_json
+            SELECT lpn, consecutivo, tipo, cliente, solicitante, arribo, fecha_hora, sku, lote, cantidad, cajas, tarima_actual, tarima_total, variables_json
             FROM historico_impresiones
             WHERE cliente = $cliente AND arribo = $arribo
             ORDER BY fecha_hora;
@@ -249,7 +444,7 @@ public sealed class LocalCacheStore
         await using var connection = await AbrirConexionAsync(cancellationToken);
         await using var cmd = connection.CreateCommand();
         cmd.CommandText = """
-            SELECT lpn, consecutivo, tipo, cliente, solicitante, arribo, fecha_hora, sku, lote, cantidad, cajas, variables_json
+            SELECT lpn, consecutivo, tipo, cliente, solicitante, arribo, fecha_hora, sku, lote, cantidad, cajas, tarima_actual, tarima_total, variables_json
             FROM historico_impresiones
             WHERE $filtro = ''
                OR lpn LIKE '%' || $filtro || '%'
@@ -289,7 +484,9 @@ public sealed class LocalCacheStore
         Lote: reader.IsDBNull(8) ? null : reader.GetString(8),
         Cantidad: reader.IsDBNull(9) ? null : decimal.Parse(reader.GetString(9), CultureInfo.InvariantCulture),
         Cajas: reader.IsDBNull(10) ? null : reader.GetString(10),
-        VariablesJson: reader.IsDBNull(11) ? null : reader.GetString(11));
+        TarimaActual: reader.IsDBNull(11) ? null : reader.GetInt32(11),
+        TarimaTotal: reader.IsDBNull(12) ? null : reader.GetInt32(12),
+        VariablesJson: reader.IsDBNull(13) ? null : reader.GetString(13));
 
     private static async Task MigrarEsquemaHistoricoAsync(SqliteConnection connection, CancellationToken cancellationToken)
     {
@@ -336,6 +533,16 @@ public sealed class LocalCacheStore
         if (!columnas.Contains("cajas"))
         {
             await EjecutarAsync(connection, null, "ALTER TABLE historico_impresiones ADD COLUMN cajas TEXT;", cancellationToken);
+        }
+
+        if (!columnas.Contains("tarima_actual"))
+        {
+            await EjecutarAsync(connection, null, "ALTER TABLE historico_impresiones ADD COLUMN tarima_actual INTEGER;", cancellationToken);
+        }
+
+        if (!columnas.Contains("tarima_total"))
+        {
+            await EjecutarAsync(connection, null, "ALTER TABLE historico_impresiones ADD COLUMN tarima_total INTEGER;", cancellationToken);
         }
     }
 

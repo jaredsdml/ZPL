@@ -46,6 +46,7 @@ public sealed partial class HistoricoViewModel : ObservableObject
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(ExportarExcelCommand))]
     [NotifyCanExecuteChangedFor(nameof(EliminarSeleccionCommand))]
+    [NotifyCanExecuteChangedFor(nameof(EditarYReimprimirCommand))]
     private bool _estaOcupado;
 
     private IReadOnlyList<HistoricoImpresionRecord> _seleccionados = Array.Empty<HistoricoImpresionRecord>();
@@ -65,6 +66,7 @@ public sealed partial class HistoricoViewModel : ObservableObject
         _seleccionados = seleccionados;
         ReimprimirSeleccionCommand.NotifyCanExecuteChanged();
         EliminarSeleccionCommand.NotifyCanExecuteChanged();
+        EditarYReimprimirCommand.NotifyCanExecuteChanged();
     }
 
     partial void OnBusquedaTextoChanged(string value)
@@ -144,11 +146,59 @@ public sealed partial class HistoricoViewModel : ObservableObject
         }
     }
 
+    /// <summary>
+    /// Se dispara cuando "Reimprimir Selección" ya cargó los registros en el Generador
+    /// Principal: MainViewModel se suscribe para cambiar la pestaña activa hacia él.
+    /// </summary>
+    public event Action? SolicitoCambiarAGeneradorPrincipal;
+
     private bool PuedeReimprimir() => _seleccionados.Count > 0 && !EstaOcupado;
 
+    /// <summary>
+    /// Ya no imprime directamente: carga los registros seleccionados (con su LPN,
+    /// TarimaActual/TarimaTotal originales) en el grid del Generador Principal y cambia la
+    /// pestaña activa hacia allá, para que el operador los imprima tal cual con "Imprimir",
+    /// o ajuste la selección / "Impresión por lotes" para partir el lote — lo que dispara la
+    /// regla crítica de recálculo y UPDATE de tarima en esa pestaña.
+    /// </summary>
     [RelayCommand(CanExecute = nameof(PuedeReimprimir))]
     private async Task ReimprimirSeleccionAsync()
     {
+        if (_seleccionados.Count == 0)
+        {
+            return;
+        }
+
+        EstaOcupado = true;
+        try
+        {
+            var seleccionados = _seleccionados;
+            await _generador.CargarRegistrosDesdeHistoricoAsync(seleccionados);
+            EstadoMensaje = $"{seleccionados.Count} registro(s) cargados en el Generador Principal para reimprimir.";
+            SolicitoCambiarAGeneradorPrincipal?.Invoke();
+        }
+        finally
+        {
+            EstaOcupado = false;
+        }
+    }
+
+    private bool PuedeEditar() => _seleccionados.Count == 1 && !EstaOcupado;
+
+    /// <summary>
+    /// Edita Sku/Lote/Cantidad de un único folio ya impreso y lo reimprime, conservando su
+    /// LPN y su TarimaActual/TarimaTotal originales (el "X de N" no cambia solo porque se
+    /// corrigió un dato). Cada campo modificado queda registrado en historico_cambios_log,
+    /// en Neon si está disponible y siempre en la caché local.
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(PuedeEditar))]
+    private async Task EditarYReimprimirAsync()
+    {
+        if (_seleccionados.Count != 1)
+        {
+            return;
+        }
+
         var impresora = _generador.ImpresoraSeleccionada;
         if (string.IsNullOrWhiteSpace(impresora))
         {
@@ -156,64 +206,112 @@ public sealed partial class HistoricoViewModel : ObservableObject
             return;
         }
 
+        var registro = _seleccionados[0];
+        var dialogo = new EditarReimpresionWindow(registro) { Owner = Application.Current.MainWindow };
+        if (dialogo.ShowDialog() != true)
+        {
+            return;
+        }
+
         EstaOcupado = true;
         try
         {
-            var total = _seleccionados.Count;
-            var errores = 0;
-
-            for (var i = 0; i < _seleccionados.Count; i++)
+            var cambios = new List<CambioCampo>();
+            if (!string.Equals(registro.Sku, dialogo.NuevoSku, StringComparison.Ordinal))
             {
-                var registro = _seleccionados[i];
-                var cliente = _generador.Clientes.FirstOrDefault(c =>
-                    string.Equals(c.Codigo, registro.Cliente, StringComparison.OrdinalIgnoreCase));
+                cambios.Add(new CambioCampo("sku", registro.Sku, dialogo.NuevoSku));
+            }
 
-                if (cliente?.PlantillaZpl is null)
+            if (!string.Equals(registro.Lote, dialogo.NuevoLote, StringComparison.Ordinal))
+            {
+                cambios.Add(new CambioCampo("lote", registro.Lote, dialogo.NuevoLote));
+            }
+
+            if (registro.Cantidad != dialogo.NuevaCantidad)
+            {
+                cambios.Add(new CambioCampo(
+                    "cantidad",
+                    registro.Cantidad?.ToString(CultureInfo.InvariantCulture),
+                    dialogo.NuevaCantidad?.ToString(CultureInfo.InvariantCulture)));
+            }
+
+            if (!string.Equals(registro.Cajas, dialogo.NuevoCajas, StringComparison.Ordinal))
+            {
+                cambios.Add(new CambioCampo("cajas", registro.Cajas, dialogo.NuevoCajas));
+            }
+
+            var actualizado = registro with
+            {
+                Sku = dialogo.NuevoSku,
+                Lote = dialogo.NuevoLote,
+                Cantidad = dialogo.NuevaCantidad,
+                Cajas = dialogo.NuevoCajas
+            };
+
+            if (cambios.Count > 0)
+            {
+                var usuario = Environment.UserName;
+
+                if (_services.Historico is not null)
                 {
-                    errores++;
-                    continue;
+                    try
+                    {
+                        await _services.Historico.ActualizarConAuditoriaAsync(actualizado, cambios, usuario);
+                    }
+                    catch (Exception ex)
+                    {
+                        EstadoMensaje = $"No se pudo actualizar Neon ({ex.Message}); se guardó solo en caché local.";
+                    }
                 }
 
-                var datos = string.IsNullOrEmpty(registro.VariablesJson)
-                    ? new Dictionary<string, string?>()
-                    : JsonSerializer.Deserialize<Dictionary<string, string?>>(registro.VariablesJson) ?? new Dictionary<string, string?>();
+                await _services.CacheLocal.ActualizarConAuditoriaAsync(actualizado, cambios, usuario);
 
-                // El LPN reimpreso siempre debe ser el folio real de este registro. SKU,
-                // LOTE y CANTIDAD normalmente ya vienen en variables_json (fila completa
-                // original); se rellenan aquí solo si faltaran, sin pisar el valor correcto
-                // ya presente, para que la etiqueta reimpresa salga idéntica a la original.
-                datos["LPN"] = registro.Lpn;
-                if (registro.Sku is not null)
+                for (var idx = 0; idx < Registros.Count; idx++)
                 {
-                    datos.TryAdd("SKU", registro.Sku);
-                }
-
-                if (registro.Lote is not null)
-                {
-                    datos.TryAdd("LOTE", registro.Lote);
-                }
-
-                if (registro.Cantidad.HasValue)
-                {
-                    var cantidadTexto = registro.Cantidad.Value.ToString(CultureInfo.InvariantCulture);
-                    datos.TryAdd("CANTIDAD", cantidadTexto);
-                    datos.TryAdd("QTY", cantidadTexto);
-                }
-
-                if (registro.Cajas is not null)
-                {
-                    datos.TryAdd("CAJAS", registro.Cajas);
-                }
-
-                var zpl = ZplTemplateEngine.Generar(cliente.PlantillaZpl, cliente.MapeoColumnas, datos, i + 1, total);
-                var resultado = await _services.Impresoras.EncolarAsync(impresora, zpl, $"Reimpresión {registro.Lpn}");
-                if (!resultado.Exito)
-                {
-                    errores++;
+                    if (Registros[idx].Lpn == actualizado.Lpn)
+                    {
+                        Registros[idx] = actualizado;
+                        break;
+                    }
                 }
             }
 
-            EstadoMensaje = $"Reimpresión terminada: {total} etiqueta(s), {errores} error(es). No se alteraron secuencias de folio.";
+            var cliente = _generador.Clientes.FirstOrDefault(c =>
+                string.Equals(c.Codigo, actualizado.Cliente, StringComparison.OrdinalIgnoreCase));
+
+            if (cliente?.PlantillaZpl is null)
+            {
+                EstadoMensaje = "Los cambios se guardaron, pero no se pudo reimprimir: no se encontró la plantilla ZPL del cliente.";
+                return;
+            }
+
+            var datos = string.IsNullOrEmpty(actualizado.VariablesJson)
+                ? new Dictionary<string, string?>()
+                : JsonSerializer.Deserialize<Dictionary<string, string?>>(actualizado.VariablesJson) ?? new Dictionary<string, string?>();
+
+            // A diferencia de la reimpresión en lote (que solo rellena si el dato falta en
+            // variables_json), aquí los campos recién editados siempre pisan la fila
+            // original: el usuario acaba de corregirlos a propósito.
+            datos["LPN"] = actualizado.Lpn;
+            datos["SKU"] = actualizado.Sku;
+            datos["LOTE"] = actualizado.Lote;
+            if (actualizado.Cantidad.HasValue)
+            {
+                var cantidadTexto = actualizado.Cantidad.Value.ToString(CultureInfo.InvariantCulture);
+                datos["CANTIDAD"] = cantidadTexto;
+                datos["QTY"] = cantidadTexto;
+            }
+
+            datos["CAJAS"] = actualizado.Cajas;
+
+            var indiceParaZpl = actualizado.TarimaActual ?? 1;
+            var totalParaZpl = actualizado.TarimaTotal ?? 1;
+            var zpl = ZplTemplateEngine.Generar(cliente.PlantillaZpl, cliente.MapeoColumnas, datos, indiceParaZpl, totalParaZpl);
+            var resultado = await _services.Impresoras.EncolarAsync(impresora, zpl, $"Reimpresión editada {actualizado.Lpn}");
+
+            EstadoMensaje = resultado.Exito
+                ? $"'{actualizado.Lpn}' actualizado y reimpreso correctamente ({cambios.Count} campo(s) modificado(s))."
+                : $"'{actualizado.Lpn}' actualizado, pero la reimpresión falló: {resultado.Error}";
         }
         finally
         {
@@ -402,6 +500,7 @@ public sealed partial class HistoricoViewModel : ObservableObject
             EstaOcupado = false;
             ReimprimirSeleccionCommand.NotifyCanExecuteChanged();
             EliminarSeleccionCommand.NotifyCanExecuteChanged();
+            EditarYReimprimirCommand.NotifyCanExecuteChanged();
             ExportarExcelCommand.NotifyCanExecuteChanged();
         }
     }

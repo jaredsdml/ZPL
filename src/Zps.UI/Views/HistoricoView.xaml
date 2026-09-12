@@ -34,7 +34,10 @@
                          ToolTip="Buscar por LPN, Arribo, Cliente, Solicitante, Tipo, SKU o Lote..." />
 
                 <Button Grid.Column="2" Content="🔄 Sincronizar (F5)" Command="{Binding SincronizarCommand}" />
-                <Button Grid.Column="4" Style="{StaticResource SecondaryButton}" Content="🖨️ Reimprimir Selección" Command="{Binding ReimprimirSeleccionCommand}" />
+                <Button Grid.Column="4" Style="{StaticResource SecondaryButton}"
+                        Content="🖨️ Reimprimir Selección"
+                        ToolTip="Carga los registros seleccionados en el Generador Principal (con su LPN, Tarima e Id originales) para imprimirlos tal cual o repartirlos de nuevo."
+                        Command="{Binding ReimprimirSeleccionCommand}" />
                 <Button Grid.Column="6" Style="{StaticResource SecondaryButton}" Content="📥 Exportar a Excel" Command="{Binding ExportarExcelCommand}" />
                 <Button Grid.Column="8" Style="{StaticResource DangerButton}" Content="🗑️ Eliminar Selección" Command="{Binding EliminarSeleccionCommand}" />
             </Grid>
@@ -45,7 +48,17 @@
                   ItemsSource="{Binding VistaFiltrada}"
                   SelectionMode="Extended"
                   SelectionChanged="DataGridHistorico_OnSelectionChanged"
+                  MouseDoubleClick="DataGridHistorico_OnMouseDoubleClick"
+                  MouseRightButtonUp="DataGridHistorico_OnMouseRightButtonUp"
                   AutoGenerateColumns="False">
+            <DataGrid.ContextMenu>
+                <ContextMenu>
+                    <!-- Un ContextMenu no hereda el DataContext del árbol visual (es un popup
+                         aparte): hay que ir a buscarlo explícitamente vía PlacementTarget. -->
+                    <MenuItem Header="✏️ Editar y Reimprimir"
+                              Command="{Binding PlacementTarget.DataContext.EditarYReimprimirCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
+                </ContextMenu>
+            </DataGrid.ContextMenu>
             <DataGrid.Columns>
                 <DataGridTextColumn Header="LPN" Binding="{Binding Lpn}" Width="180" />
                 <DataGridTextColumn Header="Consecutivo" Binding="{Binding Consecutivo}" Width="100" />

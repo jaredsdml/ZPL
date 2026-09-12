@@ -11,10 +11,37 @@ namespace Zps.UI.Views;
 public partial class ConfirmacionPasswordWindow : Window
 {
     private const string PasswordEsperada = "4ba4e13d1F";
+    private readonly string _mensajeContrasenaIncorrecta;
 
-    public ConfirmacionPasswordWindow()
+    /// <summary>
+    /// Diálogo genérico de contraseña maestra: por defecto arma el texto de borrado seguro
+    /// (uso original en Histórico), pero admite personalizar título/mensaje/texto del botón
+    /// de confirmación para reutilizarlo en otros accesos protegidos (p. ej. la
+    /// administración de plantillas ZPL) sin duplicar la lógica de verificación.
+    /// </summary>
+    public ConfirmacionPasswordWindow(string? titulo = null, string? mensaje = null, string? textoBotonConfirmar = null)
     {
         InitializeComponent();
+
+        if (titulo is not null)
+        {
+            Title = titulo;
+        }
+
+        if (mensaje is not null)
+        {
+            TxtMensaje.Text = mensaje;
+        }
+
+        if (textoBotonConfirmar is not null)
+        {
+            BtnConfirmar.Content = textoBotonConfirmar;
+        }
+
+        _mensajeContrasenaIncorrecta = mensaje is null
+            ? "Contraseña incorrecta. Se canceló la eliminación."
+            : "Contraseña incorrecta. Se canceló la operación.";
+
         Loaded += (_, _) => CajaPassword.Focus();
     }
 
@@ -38,7 +65,7 @@ public partial class ConfirmacionPasswordWindow : Window
 
         MessageBox.Show(
             this,
-            "Contraseña incorrecta. Se canceló la eliminación.",
+            _mensajeContrasenaIncorrecta,
             "Acceso denegado",
             MessageBoxButton.OK,
             MessageBoxImage.Error);

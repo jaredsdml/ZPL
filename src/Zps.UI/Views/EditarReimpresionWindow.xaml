@@ -1,0 +1,33 @@
+<Window x:Class="Zps.UI.Views.EditarReimpresionWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Editar y Reimprimir"
+        Height="410" Width="420"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="NoResize"
+        ShowInTaskbar="False">
+    <StackPanel Margin="20">
+        <TextBlock Text="Ajusta los campos operativos y reimprime. Cada cambio queda registrado en la auditoría (historico_cambios_log)."
+                   TextWrapping="Wrap" Margin="0,0,0,14" />
+
+        <TextBlock Text="LPN (no editable):" Margin="0,0,0,4" />
+        <TextBox x:Name="TxtLpn" IsReadOnly="True" Padding="6,5" Margin="0,0,0,12" />
+
+        <TextBlock Text="SKU:" Margin="0,0,0,4" />
+        <TextBox x:Name="TxtSku" Padding="6,5" Margin="0,0,0,12" />
+
+        <TextBlock Text="Lote:" Margin="0,0,0,4" />
+        <TextBox x:Name="TxtLote" Padding="6,5" Margin="0,0,0,12" />
+
+        <TextBlock Text="Cantidad:" Margin="0,0,0,4" />
+        <TextBox x:Name="TxtCantidad" Padding="6,5" Margin="0,0,0,12" />
+
+        <TextBlock Text="Cajas:" Margin="0,0,0,4" />
+        <TextBox x:Name="TxtCajas" Padding="6,5" Margin="0,0,0,12" />
+
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,0">
+            <Button Content="Cancelar" Style="{StaticResource SecondaryButton}" Click="BtnCancelar_OnClick" Margin="0,0,8,0" IsCancel="True" />
+            <Button Content="Guardar y Reimprimir" Click="BtnGuardar_OnClick" IsDefault="True" />
+        </StackPanel>
+    </StackPanel>
+</Window>
