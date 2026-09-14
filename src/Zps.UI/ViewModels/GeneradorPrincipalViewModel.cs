@@ -422,17 +422,29 @@ public sealed partial class GeneradorPrincipalViewModel : ObservableObject
         DatosExcel is not null &&
         DatosExcel.Rows.Cast<DataRow>().Any(fila => fila["_Seleccionado"] is bool marcada && marcada);
 
+    /// <summary>
+    /// Un LPN pre-llenado en el Excel puede ser (a) vacío: falta generar; (b) un "trigger"
+    /// corto como "PNC" que el operador tipeó a mano solo para indicar el tipo de secuencia
+    /// (lo usa MinisoLpnEngine.DeterminarTipoEstandar) pero que NO es un folio real: también
+    /// falta generar y consumir el consecutivo; o (c) un folio real y completo ya generado
+    /// (p. ej. "LGMA20260216473", "PNC202600014943", "PNCD01-00042"): no se debe regenerar.
+    /// El corte de longitud (10) separa (b) de (c): el folio más corto que produce
+    /// FormatearFolio (MNS_PNC_*) tiene 12 caracteres, y ningún trigger de tipo llega a 10.
+    /// </summary>
+    private static bool EsLpnYaGenerado(string valorCelda) =>
+        !string.IsNullOrWhiteSpace(valorCelda) && valorCelda.Trim().Length > 10;
+
     private bool HayFilasSinLpnEnSeleccion() =>
         DatosExcel is not null &&
         DatosExcel.Rows.Cast<DataRow>().Any(fila =>
             fila["_Seleccionado"] is bool marcada && marcada &&
-            string.IsNullOrWhiteSpace(ObtenerValorColumna(fila, "LPN")));
+            !EsLpnYaGenerado(ObtenerValorColumna(fila, "LPN")));
 
     private bool HayLpnVisibleParaImprimir() =>
         DatosExcel is not null &&
         DatosExcel.Rows.Cast<DataRow>().Any(fila =>
             fila["_Seleccionado"] is bool marcada && marcada &&
-            !string.IsNullOrWhiteSpace(ObtenerValorColumna(fila, "LPN")));
+            EsLpnYaGenerado(ObtenerValorColumna(fila, "LPN")));
 
     /// <summary>
     /// Habilitado como "Generar" mientras la selección tenga alguna fila sin LPN todavía;
@@ -484,7 +496,7 @@ public sealed partial class GeneradorPrincipalViewModel : ObservableObject
             // no vuelve a pedir folios para las que ya tienen uno.
             var filas = DatosExcel.Rows.Cast<DataRow>()
                 .Where(fila => fila["_Seleccionado"] is bool marcada && marcada &&
-                                string.IsNullOrWhiteSpace(ObtenerValorColumna(fila, "LPN")))
+                                !EsLpnYaGenerado(ObtenerValorColumna(fila, "LPN")))
                 .ToList();
 
             if (filas.Count == 0)
@@ -692,7 +704,7 @@ public sealed partial class GeneradorPrincipalViewModel : ObservableObject
 
             var filas = todasLasFilas
                 .Where(fila => fila["_Seleccionado"] is bool marcada && marcada &&
-                               !string.IsNullOrWhiteSpace(ObtenerValorColumna(fila, "LPN")))
+                               EsLpnYaGenerado(ObtenerValorColumna(fila, "LPN")))
                 .ToList();
 
             if (filas.Count == 0)
