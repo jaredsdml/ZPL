@@ -52,6 +52,9 @@
             <TabItem x:Name="TabHistorico" Header="Histórico y Reimpresiones">
                 <views:HistoricoView DataContext="{Binding Historico}" />
             </TabItem>
+            <TabItem x:Name="TabInventario" Header="Inventario">
+                <views:InventarioGeneralView DataContext="{Binding Inventario}" />
+            </TabItem>
         </TabControl>
     </DockPanel>
 </Window>

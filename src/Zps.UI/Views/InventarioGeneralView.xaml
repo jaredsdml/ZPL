@@ -1,0 +1,304 @@
+<UserControl x:Class="Zps.UI.Views.InventarioGeneralView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:Zps.UI.ViewModels"
+             d:DataContext="{d:DesignInstance vm:InventarioGeneralViewModel}"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             mc:Ignorable="d">
+
+    <!-- Enter en cualquier TextBox de la barra de filtros dispara la búsqueda, sin importar
+         cuál de ellos tenga el foco (TextBox de una sola línea no consume Return). -->
+    <UserControl.InputBindings>
+        <KeyBinding Key="Return" Command="{Binding BuscarCommand}" />
+    </UserControl.InputBindings>
+
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <Border Grid.Row="0" Style="{StaticResource CardBorder}" Margin="0,0,0,12">
+            <StackPanel Orientation="Horizontal">
+                <StackPanel Width="150" Margin="0,0,10,0">
+                    <TextBlock Text="LPN" Style="{StaticResource SubtleTextBlock}" Margin="2,0,0,2" />
+                    <TextBox Text="{Binding FiltroLpn, UpdateSourceTrigger=PropertyChanged}" />
+                </StackPanel>
+                <StackPanel Width="150" Margin="0,0,10,0">
+                    <TextBlock Text="SKU" Style="{StaticResource SubtleTextBlock}" Margin="2,0,0,2" />
+                    <TextBox Text="{Binding FiltroSku, UpdateSourceTrigger=PropertyChanged}" />
+                </StackPanel>
+                <StackPanel Width="130" Margin="0,0,10,0">
+                    <TextBlock Text="Lote" Style="{StaticResource SubtleTextBlock}" Margin="2,0,0,2" />
+                    <TextBox Text="{Binding FiltroLote, UpdateSourceTrigger=PropertyChanged}" />
+                </StackPanel>
+                <StackPanel Width="130" Margin="0,0,10,0">
+                    <TextBlock Text="Ubicación" Style="{StaticResource SubtleTextBlock}" Margin="2,0,0,2" />
+                    <TextBox Text="{Binding FiltroUbicacion, UpdateSourceTrigger=PropertyChanged}" />
+                </StackPanel>
+                <StackPanel Width="100" Margin="0,0,16,0">
+                    <TextBlock Text="Cliente" Style="{StaticResource SubtleTextBlock}" Margin="2,0,0,2" />
+                    <TextBox Text="{Binding FiltroCliente, UpdateSourceTrigger=PropertyChanged}" />
+                </StackPanel>
+
+                <CheckBox Content="Solo disponibles" IsChecked="{Binding SoloDisponibles}"
+                          VerticalAlignment="Bottom" Margin="0,0,16,7" />
+
+                <Button Content="🔍 Buscar (Enter)" Command="{Binding BuscarCommand}"
+                        VerticalAlignment="Bottom" Margin="0,0,8,0" />
+                <Button Style="{StaticResource SecondaryButton}" Content="✖ Limpiar filtros"
+                        Command="{Binding LimpiarFiltrosCommand}" VerticalAlignment="Bottom" Margin="0,0,8,0" />
+                <Button Style="{StaticResource SecondaryButton}" Content="📥 Exportar a Excel"
+                        Command="{Binding ExportarExcelCommand}" VerticalAlignment="Bottom" />
+            </StackPanel>
+        </Border>
+
+        <!-- SelectionUnit="CellOrRowHeader" (esta tabla en particular sobre-escribe el
+             FullRow global de Styles.xaml): el operador puede sombrear celdas sueltas,
+             rangos, o filas completas usando el encabezado de fila. El copiado real NO usa
+             el mecanismo por defecto de WPF (que además del texto agrega un payload
+             "HTML Format" que Excel rechaza con "no puede pegar los datos"): se intercepta
+             ApplicationCommands.Copy en el code-behind y se arma un TSV limpio a mano. -->
+        <DataGrid Grid.Row="1"
+                  x:Name="DataGridInventario"
+                  ItemsSource="{Binding VistaFiltrada}"
+                  SelectionUnit="CellOrRowHeader"
+                  SelectionMode="Extended"
+                  ClipboardCopyMode="ExcludeHeader"
+                  VirtualizingPanel.IsVirtualizing="True"
+                  VirtualizingPanel.VirtualizationMode="Recycling"
+                  VirtualizingPanel.ScrollUnit="Pixel"
+                  EnableRowVirtualization="True"
+                  EnableColumnVirtualization="True"
+                  AutoGenerateColumns="False">
+            <DataGrid.CommandBindings>
+                <CommandBinding Command="ApplicationCommands.Copy" Executed="DataGridInventario_OnCopyExecuted" />
+            </DataGrid.CommandBindings>
+            <!-- Tarimas retenidas/bloqueadas (t_hu_master.status = 'H') resaltan con un fondo
+                 ámbar tenue y un borde inferior sólido, para diferenciarlas de un vistazo de
+                 las activas ('A') sin depender solo de leer la columna Estatus. -->
+            <DataGrid.RowStyle>
+                <Style TargetType="DataGridRow">
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding EstatusTarima}" Value="H">
+                            <Setter Property="Background" Value="#33D97706" />
+                            <Setter Property="BorderBrush" Value="#D97706" />
+                            <Setter Property="BorderThickness" Value="0,0,0,1" />
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </DataGrid.RowStyle>
+            <!-- Celdas de la columna Estatus con valor 'H' además resaltan en texto ámbar y
+                 negrita, para que el bloqueo se note incluso mirando solo esa columna. -->
+            <DataGrid.CellStyle>
+                <Style TargetType="DataGridCell">
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding EstatusTarima}" Value="H">
+                            <Setter Property="Foreground" Value="#B45309" />
+                            <Setter Property="FontWeight" Value="Bold" />
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </DataGrid.CellStyle>
+            <DataGrid.Resources>
+                <!-- Contenido común del encabezado con filtro estilo Excel: título + un botón
+                     ▾ que abre un Popup con casillas de los valores únicos de la columna.
+
+                     DataContext="{Binding DataContext, RelativeSource={RelativeSource
+                     AncestorType=UserControl}}" en la raíz es OBLIGATORIO: el
+                     ContentPresenter que hospeda un HeaderTemplate fija el DataContext de su
+                     contenido a su propio Content (que aquí es null, porque el
+                     DataGridColumn no tiene Header, solo HeaderTemplate) — así que sin esta
+                     línea todo binding de abajo resuelve contra null y el popup sale vacío.
+                     Se ancla al UserControl (no al DataGrid) porque el propio DataGrid vive
+                     dentro de ese mismo DataContext. -->
+                <DataTemplate x:Key="EncabezadoFiltroLote">
+                    <DockPanel LastChildFill="False" Width="104"
+                               DataContext="{Binding DataContext, RelativeSource={RelativeSource AncestorType=UserControl}}">
+                        <TextBlock Text="Lote" VerticalAlignment="Center" DockPanel.Dock="Left" />
+                        <ToggleButton x:Name="Toggle" Content="▾" DockPanel.Dock="Right"
+                                      Width="18" Height="18" Padding="0" Background="Transparent"
+                                      BorderThickness="0" Cursor="Hand" ToolTip="Filtrar por Lote" />
+                        <Popup PlacementTarget="{Binding ElementName=Toggle}"
+                               IsOpen="{Binding IsChecked, ElementName=Toggle, Mode=TwoWay}"
+                               StaysOpen="False" AllowsTransparency="True" Placement="Bottom">
+                            <Border Background="#FFFFFF" BorderBrush="#D1D5DB" BorderThickness="1"
+                                    CornerRadius="4" Padding="8" MinWidth="170">
+                                <Border.Effect>
+                                    <DropShadowEffect Color="#000000" Opacity="0.15" BlurRadius="8" ShadowDepth="2" Direction="270" />
+                                </Border.Effect>
+                                <StackPanel>
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                                        <Button Content="Todos" Padding="6,2" FontSize="11" Margin="0,0,6,0"
+                                                Command="{Binding MarcarTodosColumnaCommand}" CommandParameter="{Binding OpcionesFiltroLote}" />
+                                        <Button Content="Ninguno" Padding="6,2" FontSize="11" Style="{StaticResource SecondaryButton}"
+                                                Command="{Binding MarcarNingunoColumnaCommand}" CommandParameter="{Binding OpcionesFiltroLote}" />
+                                    </StackPanel>
+                                    <ScrollViewer MaxHeight="220" VerticalScrollBarVisibility="Auto">
+                                        <ItemsControl ItemsSource="{Binding OpcionesFiltroLote}">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <CheckBox Content="{Binding Valor}" IsChecked="{Binding Seleccionado}"
+                                                              Foreground="#1F2937" Margin="0,2" />
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </ScrollViewer>
+                                </StackPanel>
+                            </Border>
+                        </Popup>
+                    </DockPanel>
+                </DataTemplate>
+                <DataTemplate x:Key="EncabezadoFiltroUbicacion">
+                    <DockPanel LastChildFill="False" Width="94"
+                               DataContext="{Binding DataContext, RelativeSource={RelativeSource AncestorType=UserControl}}">
+                        <TextBlock Text="Ubicación" VerticalAlignment="Center" DockPanel.Dock="Left" />
+                        <ToggleButton x:Name="Toggle" Content="▾" DockPanel.Dock="Right"
+                                      Width="18" Height="18" Padding="0" Background="Transparent"
+                                      BorderThickness="0" Cursor="Hand" ToolTip="Filtrar por Ubicación" />
+                        <Popup PlacementTarget="{Binding ElementName=Toggle}"
+                               IsOpen="{Binding IsChecked, ElementName=Toggle, Mode=TwoWay}"
+                               StaysOpen="False" AllowsTransparency="True" Placement="Bottom">
+                            <Border Background="#FFFFFF" BorderBrush="#D1D5DB" BorderThickness="1"
+                                    CornerRadius="4" Padding="8" MinWidth="170">
+                                <Border.Effect>
+                                    <DropShadowEffect Color="#000000" Opacity="0.15" BlurRadius="8" ShadowDepth="2" Direction="270" />
+                                </Border.Effect>
+                                <StackPanel>
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                                        <Button Content="Todos" Padding="6,2" FontSize="11" Margin="0,0,6,0"
+                                                Command="{Binding MarcarTodosColumnaCommand}" CommandParameter="{Binding OpcionesFiltroUbicacion}" />
+                                        <Button Content="Ninguno" Padding="6,2" FontSize="11" Style="{StaticResource SecondaryButton}"
+                                                Command="{Binding MarcarNingunoColumnaCommand}" CommandParameter="{Binding OpcionesFiltroUbicacion}" />
+                                    </StackPanel>
+                                    <ScrollViewer MaxHeight="220" VerticalScrollBarVisibility="Auto">
+                                        <ItemsControl ItemsSource="{Binding OpcionesFiltroUbicacion}">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <CheckBox Content="{Binding Valor}" IsChecked="{Binding Seleccionado}"
+                                                              Foreground="#1F2937" Margin="0,2" />
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </ScrollViewer>
+                                </StackPanel>
+                            </Border>
+                        </Popup>
+                    </DockPanel>
+                </DataTemplate>
+                <DataTemplate x:Key="EncabezadoFiltroCliente">
+                    <DockPanel LastChildFill="False" Width="74"
+                               DataContext="{Binding DataContext, RelativeSource={RelativeSource AncestorType=UserControl}}">
+                        <TextBlock Text="Cliente" VerticalAlignment="Center" DockPanel.Dock="Left" />
+                        <ToggleButton x:Name="Toggle" Content="▾" DockPanel.Dock="Right"
+                                      Width="18" Height="18" Padding="0" Background="Transparent"
+                                      BorderThickness="0" Cursor="Hand" ToolTip="Filtrar por Cliente" />
+                        <Popup PlacementTarget="{Binding ElementName=Toggle}"
+                               IsOpen="{Binding IsChecked, ElementName=Toggle, Mode=TwoWay}"
+                               StaysOpen="False" AllowsTransparency="True" Placement="Bottom">
+                            <Border Background="#FFFFFF" BorderBrush="#D1D5DB" BorderThickness="1"
+                                    CornerRadius="4" Padding="8" MinWidth="140">
+                                <Border.Effect>
+                                    <DropShadowEffect Color="#000000" Opacity="0.15" BlurRadius="8" ShadowDepth="2" Direction="270" />
+                                </Border.Effect>
+                                <StackPanel>
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                                        <Button Content="Todos" Padding="6,2" FontSize="11" Margin="0,0,6,0"
+                                                Command="{Binding MarcarTodosColumnaCommand}" CommandParameter="{Binding OpcionesFiltroCliente}" />
+                                        <Button Content="Ninguno" Padding="6,2" FontSize="11" Style="{StaticResource SecondaryButton}"
+                                                Command="{Binding MarcarNingunoColumnaCommand}" CommandParameter="{Binding OpcionesFiltroCliente}" />
+                                    </StackPanel>
+                                    <ScrollViewer MaxHeight="220" VerticalScrollBarVisibility="Auto">
+                                        <ItemsControl ItemsSource="{Binding OpcionesFiltroCliente}">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <CheckBox Content="{Binding Valor}" IsChecked="{Binding Seleccionado}"
+                                                              Foreground="#1F2937" Margin="0,2" />
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </ScrollViewer>
+                                </StackPanel>
+                            </Border>
+                        </Popup>
+                    </DockPanel>
+                </DataTemplate>
+                <DataTemplate x:Key="EncabezadoFiltroEstatus">
+                    <DockPanel LastChildFill="False" Width="74"
+                               DataContext="{Binding DataContext, RelativeSource={RelativeSource AncestorType=UserControl}}">
+                        <TextBlock Text="Estatus" VerticalAlignment="Center" DockPanel.Dock="Left" />
+                        <ToggleButton x:Name="Toggle" Content="▾" DockPanel.Dock="Right"
+                                      Width="18" Height="18" Padding="0" Background="Transparent"
+                                      BorderThickness="0" Cursor="Hand" ToolTip="Filtrar por Estatus" />
+                        <Popup PlacementTarget="{Binding ElementName=Toggle}"
+                               IsOpen="{Binding IsChecked, ElementName=Toggle, Mode=TwoWay}"
+                               StaysOpen="False" AllowsTransparency="True" Placement="Bottom">
+                            <Border Background="#FFFFFF" BorderBrush="#D1D5DB" BorderThickness="1"
+                                    CornerRadius="4" Padding="8" MinWidth="120">
+                                <Border.Effect>
+                                    <DropShadowEffect Color="#000000" Opacity="0.15" BlurRadius="8" ShadowDepth="2" Direction="270" />
+                                </Border.Effect>
+                                <StackPanel>
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                                        <Button Content="Todos" Padding="6,2" FontSize="11" Margin="0,0,6,0"
+                                                Command="{Binding MarcarTodosColumnaCommand}" CommandParameter="{Binding OpcionesFiltroEstatus}" />
+                                        <Button Content="Ninguno" Padding="6,2" FontSize="11" Style="{StaticResource SecondaryButton}"
+                                                Command="{Binding MarcarNingunoColumnaCommand}" CommandParameter="{Binding OpcionesFiltroEstatus}" />
+                                    </StackPanel>
+                                    <ScrollViewer MaxHeight="220" VerticalScrollBarVisibility="Auto">
+                                        <ItemsControl ItemsSource="{Binding OpcionesFiltroEstatus}">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <CheckBox Content="{Binding Valor}" IsChecked="{Binding Seleccionado}"
+                                                              Foreground="#1F2937" Margin="0,2" />
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </ScrollViewer>
+                                </StackPanel>
+                            </Border>
+                        </Popup>
+                    </DockPanel>
+                </DataTemplate>
+            </DataGrid.Resources>
+            <DataGrid.Columns>
+                <DataGridTextColumn Header="LPN" Binding="{Binding Lpn}" Width="170" />
+                <DataGridTextColumn Header="SKU" Binding="{Binding Sku}" Width="150" />
+                <DataGridTextColumn Header="Descripción" Binding="{Binding Descripcion}" Width="220" />
+                <DataGridTextColumn Binding="{Binding Lote}" Width="120"
+                                     HeaderTemplate="{StaticResource EncabezadoFiltroLote}" />
+                <DataGridTextColumn Binding="{Binding Ubicacion}" Width="110"
+                                     HeaderTemplate="{StaticResource EncabezadoFiltroUbicacion}" />
+                <DataGridTextColumn Binding="{Binding Cliente}" Width="90"
+                                     HeaderTemplate="{StaticResource EncabezadoFiltroCliente}" />
+                <DataGridTextColumn Header="Total" Binding="{Binding CantidadTotal}" Width="80" />
+                <DataGridTextColumn Header="Retenida" Binding="{Binding CantidadRetenida}" Width="90" />
+                <DataGridTextColumn Header="Disponible" Binding="{Binding CantidadDisponible}" Width="90" />
+                <DataGridTextColumn Header="Caducidad" Binding="{Binding Caducidad, StringFormat=d}" Width="110" />
+                <DataGridTextColumn Binding="{Binding EstatusTarima}" Width="90"
+                                     HeaderTemplate="{StaticResource EncabezadoFiltroEstatus}" />
+            </DataGrid.Columns>
+        </DataGrid>
+
+        <Grid Grid.Row="2" Margin="0,10,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBlock Grid.Column="0" Text="{Binding MensajeEstado}" TextWrapping="Wrap" VerticalAlignment="Center" />
+            <TextBlock Grid.Column="1" Text="⏳ Consultando HighJump/AAD..." Style="{StaticResource SubtleTextBlock}"
+                       VerticalAlignment="Center" Margin="0,0,16,0"
+                       Visibility="{Binding EstaCargando, Converter={StaticResource BooleanToVisibilityConverter}}" />
+            <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                <TextBlock Text="Tope:" Style="{StaticResource SubtleTextBlock}" VerticalAlignment="Center" Margin="0,0,6,0" />
+                <ComboBox ItemsSource="{Binding OpcionesLimite}"
+                          SelectedItem="{Binding LimiteSeleccionado}"
+                          DisplayMemberPath="Etiqueta"
+                          Width="110" />
+            </StackPanel>
+        </Grid>
+    </Grid>
+</UserControl>

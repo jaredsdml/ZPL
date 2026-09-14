@@ -16,7 +16,7 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty]
     private string _estadoConexion;
 
-    /// <summary>Índice de pestaña activa del TabControl (0 = Generador Principal, 1 = Histórico).</summary>
+    /// <summary>Índice de pestaña activa del TabControl (0 = Generador Principal, 1 = Histórico, 2 = Inventario).</summary>
     [ObservableProperty]
     private int _pestanaSeleccionada;
 
@@ -24,11 +24,14 @@ public sealed partial class MainViewModel : ObservableObject
 
     public HistoricoViewModel Historico { get; }
 
+    public InventarioGeneralViewModel Inventario { get; }
+
     public MainViewModel(AppServices services)
     {
         _services = services;
         Generador = new GeneradorPrincipalViewModel(services);
         Historico = new HistoricoViewModel(services, Generador);
+        Inventario = new InventarioGeneralViewModel(services);
 
         // "Reimprimir Selección" en Histórico ya no imprime directo: carga los registros en
         // el Generador Principal y pide cambiar a esa pestaña para que el operador continúe ahí.

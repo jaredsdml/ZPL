@@ -40,6 +40,17 @@ public partial class App : Application
             errorNeon = ex.Message;
         }
 
+        AadWmsService? wms = null;
+        string? errorWms = null;
+        try
+        {
+            wms = new AadWmsService(AadConnectionStringResolver.Resolve());
+        }
+        catch (Exception ex)
+        {
+            errorWms = ex.Message;
+        }
+
         var cacheLocal = new LocalCacheStore();
         try
         {
@@ -59,10 +70,12 @@ public partial class App : Application
             Historico = historico,
             CatalogoClientes = catalogo,
             Plantillas = plantillas,
+            Wms = wms,
             CacheLocal = cacheLocal,
             Impresoras = new PrinterService(),
             Preview = new LabelaryPreviewService(),
             ErrorConfiguracionNeon = errorNeon,
+            ErrorConfiguracionWms = errorWms,
         };
 
         ThemeManager.Aplicar(oscuro: false);

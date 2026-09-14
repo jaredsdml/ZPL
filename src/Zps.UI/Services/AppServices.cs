@@ -18,12 +18,15 @@ public sealed class AppServices : IAsyncDisposable
     public required HistoricoService? Historico { get; init; }
     public required CatalogoClientesService? CatalogoClientes { get; init; }
     public required PlantillasService? Plantillas { get; init; }
+    public required AadWmsService? Wms { get; init; }
     public required LocalCacheStore CacheLocal { get; init; }
     public required PrinterService Impresoras { get; init; }
     public required LabelaryPreviewService Preview { get; init; }
     public string? ErrorConfiguracionNeon { get; init; }
+    public string? ErrorConfiguracionWms { get; init; }
 
     public bool NeonDisponible => NeonDataSource is not null;
+    public bool WmsDisponible => Wms is not null;
 
     public async ValueTask DisposeAsync()
     {
